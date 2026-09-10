@@ -1,0 +1,42 @@
+{
+  "name": "flashback",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "start": "tsx apps/server/src/main.ts",
+    "db:up": "docker compose up -d db --wait",
+    "db:stop": "docker compose stop db",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "import:hexlive": "tsx scripts/import.ts",
+    "backup": "node scripts/backup.mjs",
+    "restore": "node scripts/backup.mjs restore",
+    "web": "npm run web -w @flashback/client",
+    "ios": "npm run ios -w @flashback/client",
+    "android": "npm run android -w @flashback/client",
+    "build:web": "npm run build:web -w @flashback/client",
+    "typecheck": "tsc --noEmit && npm run typecheck -w @flashback/client",
+    "test": "tsx --test tests/api.test.ts tests/import.test.ts",
+    "test:ui": "playwright test"
+  },
+  "dependencies": {
+    "dotenv": "^17.2.0",
+    "tsx": "^4.23.13"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.15.5",
+    "@types/ws": "^8.18.1",
+    "prettier": "^3.9.6",
+    "typescript": "~6.0.3"
+  }
+}

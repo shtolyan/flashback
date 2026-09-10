@@ -1,0 +1,26 @@
+{
+  "expo": {
+    "name": "Flashback",
+    "slug": "flashback",
+    "scheme": "flashback",
+    "version": "0.1.0",
+    "orientation": "default",
+    "userInterfaceStyle": "dark",
+    "icon": "./assets/icon.png",
+    "plugins": ["expo-router"],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.flashback.tracker",
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "Подключение к вашему экземпляру Flashback в локальной сети.",
+        "NSAppTransportSecurity": { "NSAllowsLocalNetworking": true }
+      }
+    },
+    "android": { "package": "com.flashback.tracker" },
+    "web": {
+      "bundler": "metro",
+      "output": "static",
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}
