@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Capture legacy HTTP data; freeze source writes before a final cutover capture."""
 import argparse
+import os
 import concurrent.futures
 import datetime
 import json
@@ -12,7 +13,7 @@ p.add_argument('--api', required=True)
 p.add_argument('--output', required=True)
 a = p.parse_args()
 def get(route):
-    with urllib.request.urlopen(a.api.rstrip('/') + route, timeout=30) as response:
+    with urllib.request.urlopen(urllib.request.Request(a.api.rstrip('/') + route, headers={'Authorization': 'Bearer ' + os.environ['HEXLIVE_BUG_TOKEN']} if os.environ.get('HEXLIVE_BUG_TOKEN') else {}), timeout=30) as response:
         return json.load(response)
 reports = get('/reports')
 shas = get('/commits')

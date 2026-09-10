@@ -16,10 +16,13 @@ import * as store from "./store.ts";
 import { pool } from "./database.ts";
 import { root, settings } from "./config.ts";
 import { openapi } from "./openapi.ts";
+import { authRoutes, actor, type AuthRequest } from "./auth-http.ts";
+import { accessEvents, getKey, reportAccess } from "./access.ts";
 
 export async function buildApp() {
   const app = Fastify({ logger: false, bodyLimit: 8 * 1024 * 1024 });
-  await app.register(cors, { origin: true });
+  await app.register(cors, { origin: true, credentials: true });
+  await authRoutes(app);
   await app.register(websocket);
   app.setErrorHandler((error: any, _req, reply) => {
     if (error instanceof z.ZodError)
@@ -28,14 +31,12 @@ export async function buildApp() {
         .send({ error: error.issues.map((x) => x.message).join("; ") });
     const code = error.statusCode ?? 500;
     if (code >= 500) console.error("API error:", error.message);
-    return reply
-      .code(code)
-      .send({
-        error: code >= 500 ? "Ошибка сервера" : error.message,
-        ...(error.actualRevision !== undefined
-          ? { actualRevision: error.actualRevision }
-          : {}),
-      });
+    return reply.code(code).send({
+      error: code >= 500 ? "Ошибка сервера" : error.message,
+      ...(error.actualRevision !== undefined
+        ? { actualRevision: error.actualRevision }
+        : {}),
+    });
   });
   const id = (request: any) => {
     const n = Number(request.params.id);
@@ -51,7 +52,7 @@ export async function buildApp() {
   app.get("/api/instance", async () => ({
     name: settings.name,
     repository: settings.repository,
-    auth: "none",
+    auth: "token",
     version: "0.1.0",
   }));
   app.get("/openapi.json", async () => openapi);
@@ -68,13 +69,27 @@ export async function buildApp() {
   app.post(base + "/reports", async (request, reply) =>
     reply
       .code(201)
-      .send(await store.createReport(createSchema.parse(request.body))),
+      .send(
+        await store.createReport(
+          createSchema.parse(request.body),
+          actor(request),
+        ),
+      ),
   );
   app.post(base + "/reports/:id", async (request) =>
-    store.updateReport(id(request), updateSchema.parse(request.body)),
+    store.updateReport(
+      id(request),
+      updateSchema.parse(request.body),
+      actor(request),
+    ),
   );
   app.post(base + "/reports/:id/comments", async (request) =>
-    store.addComment(id(request), commentSchema.parse(request.body)),
+    store.addComment(
+      id(request),
+      commentSchema.parse(request.body),
+      undefined,
+      actor(request),
+    ),
   );
   app.post(base + "/reports/:id/comments/:ordinal", async (request) => {
     const ordinal = Number((request.params as any).ordinal);
@@ -84,6 +99,7 @@ export async function buildApp() {
       id(request),
       commentSchema.parse(request.body),
       ordinal,
+      actor(request),
     );
   });
   app.post(base + "/reports/:id/transition", async (request) => {
@@ -99,6 +115,7 @@ export async function buildApp() {
       body.action,
       body.expectedRevision,
       body.text,
+      actor(request),
     );
   });
   for (const method of ["DELETE", "POST"] as const)
@@ -106,7 +123,7 @@ export async function buildApp() {
       method,
       url: base + "/reports/:id" + (method === "POST" ? "/delete" : ""),
       handler: async (request, reply) => {
-        await store.deleteReport(id(request));
+        await store.deleteReport(id(request), actor(request));
         return reply.code(204).send();
       },
     });
@@ -121,9 +138,24 @@ export async function buildApp() {
     store.putPatch(
       (request.params as any).sha,
       patchSchema.parse(request.body) as any,
+      actor(request),
     ),
   );
-  app.get(base + "/events", { websocket: true }, (socket) => {
+  app.get(base + "/reports/:id/access", async (request) => {
+    await store.getReport(id(request));
+    return reportAccess(id(request));
+  });
+  app.get(base + "/events", { websocket: true }, (socket, request) => {
+    const key = actor(request),
+      session = (request as AuthRequest).sessionHash;
+    const revoked = (id: string) => {
+      if (id === key.id) socket.close(4401, "Key revoked");
+    };
+    const loggedOut = (id: string) => {
+      if (id === session) socket.close(4401, "Signed out");
+    };
+    accessEvents.on("revoke", revoked);
+    accessEvents.on("logout", loggedOut);
     const send = (event: ChangeEvent) => {
       if (socket.readyState === 1) socket.send(JSON.stringify(event));
     };
@@ -133,13 +165,30 @@ export async function buildApp() {
     socket.on("pong", () => {
       alive = true;
     });
-    const timer = setInterval(() => {
+    const timer = setInterval(async () => {
+      try {
+        await getKey(key.id);
+        if (
+          session &&
+          !(
+            await pool.query(
+              "SELECT 1 FROM access_sessions WHERE secret_hash=$1 AND expires_at>now()",
+              [session],
+            )
+          ).rowCount
+        )
+          return socket.close(4401, "Session expired");
+      } catch {
+        return socket.close(4401, "Key revoked");
+      }
       if (!alive) return socket.terminate();
       alive = false;
       socket.ping();
     }, 25000);
     socket.on("close", () => {
       store.events.off("change", send);
+      accessEvents.off("revoke", revoked);
+      accessEvents.off("logout", loggedOut);
       clearInterval(timer);
     });
     socket.on("error", () => socket.close());

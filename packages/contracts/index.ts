@@ -65,3 +65,27 @@ export type ChangeEvent =
   | { type: "commit.changed"; sha: string }
   | { type: "connected" };
 export type { Update } from "./schemas";
+
+export interface AccessKey {
+  id: string;
+  name: string;
+  isAdmin: boolean;
+  allowedStatuses: Status[];
+  createdAt: string;
+  revokedAt: string | null;
+  lastUsedAt: string | null;
+}
+export interface AccessStamp {
+  tokenId: string;
+  name: string;
+  at: string;
+  action: string;
+  status: Status | null;
+}
+export interface ReportAccess {
+  created: AccessStamp | null;
+  updated: AccessStamp | null;
+  status: AccessStamp | null;
+  fixed: AccessStamp | null;
+  ready: AccessStamp | null;
+}

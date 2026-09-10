@@ -54,6 +54,8 @@ const response = (schema: any) => ({
     content: { "application/json": { schema } },
   },
   "400": { description: "Invalid request" },
+  "401": { description: "Missing, expired or revoked access" },
+  "403": { description: "Insufficient permission or invalid origin" },
   "404": { description: "Not found" },
   "409": {
     description: "Revision conflict; body includes error and actualRevision",
@@ -92,9 +94,91 @@ export const openapi = {
     title: "Flashback / HexLive-compatible bug API",
     version: "1.0.0",
     description:
-      "One instance, one database. No authentication. Legacy Bearer headers are accepted. PATCH semantics use POST; omitted/null fields preserve existing values. fixCommits replaces the array. Comments are addressed by zero-based ordinal. WebSocket /api/bugs/v1/events emits report.changed, report.deleted and commit.changed after commit; refresh queries after reconnect.",
+      "One instance, one database. Every API read/write requires a Bearer access key or browser session. Tokens control allowed target statuses; administrators manage keys. PATCH semantics use POST; omitted/null fields preserve existing values. fixCommits replaces the array. Comments are addressed by zero-based ordinal. WebSocket /api/bugs/v1/events emits report.changed, report.deleted and commit.changed after commit; refresh queries after reconnect.",
+  },
+  security: [{ bearerAuth: [] }, { sessionCookie: [] }],
+  components: {
+    securitySchemes: {
+      bearerAuth: { type: "http", scheme: "bearer" },
+      sessionCookie: {
+        type: "apiKey",
+        in: "cookie",
+        name: "flashback_session",
+      },
+    },
   },
   paths: {
+    "/api/auth/session": {
+      post: {
+        ...operation(
+          "Exchange a token for a 30-day HttpOnly session",
+          z.object({ token: z.string() }),
+          { type: "object" },
+        ),
+        security: [],
+      },
+    },
+    "/api/auth/me": {
+      get: operation("Current key and permissions", undefined, {
+        type: "object",
+      }),
+    },
+    "/api/auth/logout": {
+      post: {
+        ...operation("Invalidate current browser session"),
+        responses: { "204": { description: "Signed out" } },
+      },
+    },
+    "/api/auth/socket-ticket": {
+      post: operation(
+        "Issue a one-use WebSocket ticket valid for 30 seconds",
+        undefined,
+        { type: "object" },
+      ),
+    },
+    "/api/access-keys": {
+      get: operation("List key metadata; administrator only", undefined, {
+        type: "array",
+        items: { type: "object" },
+      }),
+      post: {
+        ...operation(
+          "Create key; administrator only; secret returned once",
+          z.object({
+            name: z.string().min(1).max(80),
+            isAdmin: z.boolean().optional(),
+            allowedStatuses: z.array(z.enum(statuses)).optional(),
+          }),
+          { type: "object" },
+        ),
+        responses: {
+          "201": { description: "Created; key metadata and secret" },
+        },
+      },
+    },
+    "/api/access-keys/{keyId}/revoke": {
+      parameters: [
+        {
+          name: "keyId",
+          in: "path",
+          required: true,
+          schema: { type: "string", format: "uuid" },
+        },
+      ],
+      post: {
+        ...operation("Revoke key, sessions and sockets; administrator only"),
+        responses: {
+          "204": { description: "Revoked" },
+          "409": { description: "Last administrator cannot be revoked" },
+        },
+      },
+    },
+    [base + "/reports/{id}/access"]: {
+      parameters: [id],
+      get: operation("Trusted token attribution; no raw secrets", undefined, {
+        type: "object",
+      }),
+    },
     [base + "/reports"]: {
       get: {
         ...operation("List all reports; ascending ID", undefined, {

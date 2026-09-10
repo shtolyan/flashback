@@ -10,7 +10,12 @@ const source =
   process.env.HEXLIVE_SOURCE_API ??
   "https://163-245-204-96.sslip.io/api/bugs/v1";
 async function fetchJSON(route: string) {
-  const r = await fetch(source + route, { signal: AbortSignal.timeout(30000) });
+  const r = await fetch(source + route, {
+    signal: AbortSignal.timeout(30000),
+    headers: process.env.HEXLIVE_BUG_TOKEN
+      ? { Authorization: "Bearer " + process.env.HEXLIVE_BUG_TOKEN }
+      : {},
+  });
   if (!r.ok) throw new Error(`Source returned ${r.status} for ${route}`);
   return r.json();
 }

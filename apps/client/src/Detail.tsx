@@ -37,9 +37,16 @@ import {
 import { api, base, apiOrigin, RequestError } from "./api";
 import { c, s, T, Button, Badge, Input, Label } from "./ui";
 import Overlay from "./Overlay";
+import { useAccess } from "./Auth";
+import { authCleared } from "./credentials";
+import type { ReportAccess } from "@flashback/contracts";
 
 const textDrafts = new Map<number, { text: string; revision: number }>();
 const commentDrafts = new Map<number, string>();
+authCleared.add(() => {
+  textDrafts.clear();
+  commentDrafts.clear();
+});
 export default function Detail({
   id,
   onClose,
@@ -50,6 +57,11 @@ export default function Detail({
   notify: (text: string) => void;
 }) {
   const client = useQueryClient();
+  const { canStatus } = useAccess();
+  const accessQuery = useQuery({
+    queryKey: ["report-access", id],
+    queryFn: () => api<ReportAccess>(base + "/reports/" + id + "/access"),
+  });
   const query = useQuery({
     queryKey: ["report", id],
     queryFn: ({ signal }) =>
@@ -88,6 +100,7 @@ export default function Detail({
       );
       if (updated) client.setQueryData(["report", id], updated);
       client.invalidateQueries({ queryKey: ["list"] });
+      client.invalidateQueries({ queryKey: ["report-access", id] });
       success?.();
       notify(name === "delete" ? "Баг удалён" : "Сохранено");
     } catch (e) {
@@ -329,7 +342,7 @@ export default function Detail({
                   <Button
                     icon={Check}
                     variant="primary"
-                    disabled={!!busy}
+                    disabled={!!busy || !canStatus("fixed")}
                     loading={busy === "confirm"}
                     onPress={() =>
                       perform("confirm", "/transition", {
@@ -343,7 +356,7 @@ export default function Detail({
                   <Button
                     icon={RotateCcw}
                     variant="outline"
-                    disabled={!!busy}
+                    disabled={!!busy || !canStatus("rework")}
                     onPress={() => setRework(!rework)}
                   >
                     На доработку
@@ -391,7 +404,19 @@ export default function Detail({
                     key={status}
                     accessibilityRole="button"
                     accessibilityLabel={`Статус: ${statusLabels[status]}`}
-                    disabled={!!busy || r.status === status || r.archived}
+                    disabled={
+                      !!busy ||
+                      r.status === status ||
+                      r.archived ||
+                      !canStatus(status)
+                    }
+                    accessibilityState={{
+                      disabled:
+                        !!busy ||
+                        r.status === status ||
+                        r.archived ||
+                        !canStatus(status),
+                    }}
                     onPress={() =>
                       perform("status", "", {
                         status,
@@ -403,7 +428,7 @@ export default function Detail({
                       borderColor: r.status === status ? "#6c5d91" : c.line,
                       padding: 3,
                       borderRadius: 8,
-                      opacity: busy ? 0.5 : 1,
+                      opacity: busy || !canStatus(status) ? 0.5 : 1,
                     }}
                   >
                     <Badge status={status} />
@@ -691,12 +716,37 @@ export default function Detail({
                 },
               ]}
             >
+              <View style={{ gap: 5, marginBottom: 16 }}>
+                {(["created", "ready", "fixed", "updated"] as const).map(
+                  (field) => {
+                    const stamp = accessQuery.data?.[field];
+                    return stamp ? (
+                      <T key={field} style={{ fontSize: 11, color: c.dim }}>
+                        {
+                          {
+                            created: "Создан",
+                            ready: "На проверку",
+                            fixed: "Подтверждён",
+                            updated: "Последняя правка",
+                          }[field]
+                        }{" "}
+                        · {stamp.name} · #{stamp.tokenId.slice(0, 8)}
+                      </T>
+                    ) : null;
+                  },
+                )}
+                {accessQuery.data && !accessQuery.data.updated ? (
+                  <T style={{ fontSize: 11, color: c.dim }}>
+                    История до введения ключей доступа
+                  </T>
+                ) : null}
+              </View>
               <View style={[s.row, { flexWrap: "wrap" }]}>
                 {(r.status === "fixed" || r.archived) && (
                   <Button
                     icon={r.archived ? ArchiveRestore : Archive}
                     variant="outline"
-                    disabled={!!busy}
+                    disabled={!!busy || !canStatus("fixed")}
                     onPress={() =>
                       perform("archive", "", {
                         archived: !r.archived,
@@ -710,7 +760,7 @@ export default function Detail({
                 <View style={s.grow} />
                 <Button
                   icon={Trash2}
-                  disabled={!!busy}
+                  disabled={!!busy || !canStatus("fixed")}
                   onPress={() => setConfirmDelete(!confirmDelete)}
                 >
                   Удалить

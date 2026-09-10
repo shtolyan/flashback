@@ -10,17 +10,12 @@ import {
   type ChangeEvent,
 } from "@flashback/contracts";
 import { pool, transaction } from "./database.ts";
+import type { AccessKey } from "@flashback/contracts";
+import { writeKey, record } from "./access.ts";
 
 export const events = new EventEmitter();
-export class ApiError extends Error {
-  constructor(
-    public statusCode: number,
-    message: string,
-    public actualRevision?: number,
-  ) {
-    super(message);
-  }
-}
+import { ApiError } from "./errors.ts";
+export { ApiError } from "./errors.ts";
 export const now = () =>
   new Date().toISOString().slice(0, 16).replace("T", " ") + " UTC";
 const projection = `to_jsonb(r) || jsonb_build_object(
@@ -106,12 +101,16 @@ async function changed(id: number, fn: (db: PoolClient) => Promise<void>) {
   emit({ type: "report.changed", id, revision: report.revision });
   return report;
 }
-export async function createReport(body: {
-  text: string;
-  context?: string | null;
-  reportedInVersion?: string | null;
-}) {
+export async function createReport(
+  body: {
+    text: string;
+    context?: string | null;
+    reportedInVersion?: string | null;
+  },
+  actor: AccessKey,
+) {
   const report = await transaction(async (db) => {
+    const key = await writeKey(db, actor, "created");
     const { rows } = await db.query(
       'INSERT INTO reports("createdUtc",status,text,context,"reportedInVersion") VALUES($1,\'created\',$2,$3,$4) RETURNING id',
       [
@@ -121,6 +120,7 @@ export async function createReport(body: {
         body.reportedInVersion?.trim() ?? "",
       ],
     );
+    await record(db, key, rows[0].id, "created", "created");
     return getReport(rows[0].id, db);
   });
   emit({ type: "report.changed", id: report.id, revision: report.revision });
@@ -139,9 +139,19 @@ async function lock(id: number, db: PoolClient, revision?: number | null) {
       rows[0].revision,
     );
 }
-export async function updateReport(id: number, body: Update) {
+export async function updateReport(id: number, body: Update, actor: AccessKey) {
   return changed(id, async (db) => {
+    const key = await writeKey(db, actor, body.status ?? undefined);
+    if (body.archived != null || body.fixedInVersion)
+      await writeKey(db, actor, "fixed");
     await lock(id, db, body.expectedRevision);
+    await record(
+      db,
+      key,
+      id,
+      body.fixCommits != null ? "fix_commits" : "updated",
+      body.status ?? undefined,
+    );
     const fields = [
       "text",
       "status",
@@ -179,11 +189,14 @@ export async function updateReport(id: number, body: Update) {
 export async function addComment(
   id: number,
   body: { text: string; author?: string | null },
-  ordinal?: number,
+  ordinal: number | undefined,
+  actor: AccessKey,
 ) {
   return changed(id, async (db) => {
+    const key = await writeKey(db, actor);
     await lock(id, db);
     if (ordinal === undefined) {
+      await record(db, key, id, "comment");
       await db.query(
         'INSERT INTO comments SELECT $1,COALESCE(max(ordinal)+1,0),$2,$3,$4 FROM comments WHERE "reportId"=$1',
         [id, now(), body.author?.trim() || "user", body.text],
@@ -196,10 +209,12 @@ export async function addComment(
         'UPDATE comments SET text=$3,"whenUtc"=$4 WHERE "reportId"=$1 AND ordinal=$2',
         [id, ordinal, body.text, now()],
       );
-      if (result.rowCount)
+      if (result.rowCount) {
+        await record(db, key, id, "comment_edited");
         await db.query("UPDATE reports SET revision=revision+1 WHERE id=$1", [
           id,
         ]);
+      }
     }
   });
 }
@@ -209,9 +224,22 @@ export async function transitionReport(
   action: "confirm" | "rework",
   revision: number,
   text: string,
+  actor: AccessKey,
 ) {
   return changed(id, async (db) => {
+    const key = await writeKey(
+      db,
+      actor,
+      action === "confirm" ? "fixed" : "rework",
+    );
     await lock(id, db, revision);
+    await record(
+      db,
+      key,
+      id,
+      "transition",
+      action === "confirm" ? "fixed" : "rework",
+    );
     const r = await getReport(id, db);
     if (r.status !== "ready_for_test")
       throw new ApiError(
@@ -240,9 +268,13 @@ export async function transitionReport(
       );
   });
 }
-export async function deleteReport(id: number) {
-  const result = await pool.query("DELETE FROM reports WHERE id=$1", [id]);
-  if (!result.rowCount) throw new ApiError(404, "Отчёт не найден");
+export async function deleteReport(id: number, actor: AccessKey) {
+  await transaction(async (db) => {
+    const key = await writeKey(db, actor, "fixed");
+    await lock(id, db);
+    await record(db, key, id, "deleted");
+    await db.query("DELETE FROM reports WHERE id=$1", [id]);
+  });
   emit({ type: "report.deleted", id });
 }
 export async function getPatch(sha: string): Promise<CommitPatch> {
@@ -256,7 +288,11 @@ export async function getPatch(sha: string): Promise<CommitPatch> {
     throw new ApiError(404, "Патч не найден");
   return rows[0].data;
 }
-export async function putPatch(sha: string, body: Partial<CommitPatch>) {
+export async function putPatch(
+  sha: string,
+  body: Partial<CommitPatch>,
+  actor: AccessKey,
+) {
   sha = sha.trim().toLowerCase();
   if (!/^[a-f0-9]{40}$/.test(sha))
     throw new ApiError(400, "A full 40-character commit SHA is required.");
@@ -273,10 +309,17 @@ export async function putPatch(sha: string, body: Partial<CommitPatch>) {
     truncated: !!body.truncated || (body.patch?.length ?? 0) > 1_000_000,
     storedUtc: now(),
   };
-  await pool.query(
-    "INSERT INTO commit_patches VALUES($1,$2) ON CONFLICT(sha) DO UPDATE SET data=excluded.data",
-    [sha, patch],
-  );
+  await transaction(async (db) => {
+    const key = await writeKey(db, actor);
+    await db.query(
+      "INSERT INTO commit_patches VALUES($1,$2) ON CONFLICT(sha) DO UPDATE SET data=excluded.data",
+      [sha, patch],
+    );
+    await db.query(
+      "INSERT INTO patch_access VALUES($1,$2,$3,now()) ON CONFLICT(sha) DO UPDATE SET token_id=excluded.token_id,token_name=excluded.token_name,at=now()",
+      [sha, key.id, key.name],
+    );
+  });
   emit({ type: "commit.changed", sha });
   return patch;
 }

@@ -1,8 +1,8 @@
 diff --git a/.agents/skills/hexlive-bug-tracker/SKILL.md b/.agents/skills/hexlive-bug-tracker/SKILL.md
-index f54a5563f..0f4b87863 100644
+index f54a5563f..04986a563 100644
 --- a/.agents/skills/hexlive-bug-tracker/SKILL.md
 +++ b/.agents/skills/hexlive-bug-tracker/SKILL.md
-@@ -5,23 +5,20 @@ description: Read and mutate HexLive bug reports in the central server tracker,
+@@ -5,23 +5,27 @@ description: Read and mutate HexLive bug reports in the central server tracker,
  
  # HexLive server bug tracker
  
@@ -29,15 +29,22 @@ index f54a5563f..0f4b87863 100644
  
 -Reads and new player reports are public. Status changes, agent fields,
 -comments authored by an agent, and deletion are authenticated.
-+The current instance requires no authentication, as requested by its owner.
-+Existing Bearer headers are accepted and ignored by Flashback. The CLI retains
-+its token lookup for compatibility with other instances. Never print existing
-+token files or reuse them for SSH, player control or admin access.
++Every request, including GET and report creation, requires a Bearer access key.
++The updated CLI reads HEXLIVE_BUG_TOKEN, --token-file, the private skill bug-token,
++or ~/.config/hexlive/bug-token. The existing agent key is registered with
++created/in_progress/ready_for_test/rework permissions; it cannot set fixed,
++archive, delete, or manage keys. Use a separate named key per agent when available.
++The player key has all statuses but cannot manage access keys. A distinct admin
++key manages keys in Flashback. Never print token files or include secrets in reports.
++
++Old API URLs remain proxied, but old clients must send authentication on reads
++and creates too. The game creation call is updated in source and requires a new
++player build. Do not make an anonymous compatibility exception.
  
  ## Workflow
  
 diff --git a/.agents/skills/hexlive-bug-tracker/scripts/bugs.py b/.agents/skills/hexlive-bug-tracker/scripts/bugs.py
-index 0cab15c92..99a268540 100644
+index 0cab15c92..f01b736ad 100644
 --- a/.agents/skills/hexlive-bug-tracker/scripts/bugs.py
 +++ b/.agents/skills/hexlive-bug-tracker/scripts/bugs.py
 @@ -2,7 +2,7 @@
@@ -49,32 +56,33 @@ index 0cab15c92..99a268540 100644
  REPOSITORY_TOKEN=pathlib.Path(__file__).resolve().parents[1]/"bug-token"
  USER_TOKEN=pathlib.Path("~/.config/hexlive/bug-token").expanduser()
  
-diff --git a/AGENTS.md b/AGENTS.md
-index 3ab655e4b..2cc6f74de 100644
---- a/AGENTS.md
-+++ b/AGENTS.md
-@@ -83,7 +83,9 @@ python3 Tools/unity_mcp_lease.py acquire --agent <stable-agent-task-name> --task
- 
- At the start of every bug-fixing session, and whenever the user asks to inspect
- or fix bugs, use `.agents/skills/hexlive-bug-tracker/SKILL.md`. The source of
--truth is the production server SQLite database exposed at `/api/bugs/v1`.
-+truth is Flashback PostgreSQL in Singapore, exposed at
-+`https://flashback.62-146-235-120.sslip.io/api/bugs/v1`. The old production
-+`/api/bugs/v1` route proxies to this same API; the SQLite copy is retired.
- 
- - The work queue is every report whose `status` is `"created"` or `"rework"`.
-   Before beginning work on one, immediately set its status to `"in_progress"`
-@@ -109,7 +111,8 @@ truth is the production server SQLite database exposed at `/api/bugs/v1`.
-   `ready_for_test → rework → in_progress` for a failed test. `archived` is a
-   separate history flag for a confirmed `fixed` report, not deletion.
- - Do not edit `BUGS.json` for report work. It is a retired one-shot migration
--  source. The game and agents read and mutate reports through authenticated
--  HTTP; the web admin uses the same database.
-+  source. The game and agents read and mutate reports through the same HTTP API;
-+  this Flashback instance requires no authentication. The web UI uses the
-+  same PostgreSQL database.
- - `BUGS.json` remains only the coordination file for the Unity MCP lease below.
-   Never add reports back to it or treat its stale `reports` array as a queue.
+@@ -23,10 +23,9 @@ def call(args,method,path,payload=None,auth=False):
+     data=None if payload is None else json.dumps(payload,ensure_ascii=False).encode()
+     headers={"Accept":"application/json"}
+     if data is not None: headers["Content-Type"]="application/json"
+-    if auth:
+-        value=token(args)
+-        if not value: raise SystemExit("bug token is missing (environment, --token-file, repository, or user config)")
+-        headers["Authorization"]="Bearer "+value
++    value=token(args)
++    if not value: raise SystemExit("bug token is missing (environment, --token-file, repository, or user config)")
++    headers["Authorization"]="Bearer "+value
+     request=urllib.request.Request(args.api.rstrip("/")+path,data=data,headers=headers,method=method)
+     try:
+         with urllib.request.urlopen(request,timeout=15) as response:
+diff --git a/Assets/HexLive/UnityPresentation/UI/BugReportStore.cs b/Assets/HexLive/UnityPresentation/UI/BugReportStore.cs
+index 3edba4982..96e0d6eab 100644
+--- a/Assets/HexLive/UnityPresentation/UI/BugReportStore.cs
++++ b/Assets/HexLive/UnityPresentation/UI/BugReportStore.cs
+@@ -177,7 +177,7 @@ namespace HexLive.UnityPresentation.UI
+                 context = context,
+                 reportedInVersion = Application.version
+             };
+-            var report = Send<Report>(HttpMethod.Post, "/reports", JsonUtility.ToJson(request), false);
++            var report = Send<Report>(HttpMethod.Post, "/reports", JsonUtility.ToJson(request), true);
+             if (report == null) return null;
+             EnsureLoaded();
+             _model.reports.Add(report);
 diff --git a/Server/Caddyfile b/Server/Caddyfile
 index 6decee42b..dac2a82d1 100644
 --- a/Server/Caddyfile
@@ -100,32 +108,8 @@ index 6decee42b..dac2a82d1 100644
 +		reverse_proxy 127.0.0.1:5123
 +	}
  }
-diff --git a/Spec/114.md b/Spec/114.md
-index 9cfd135de..81c7b1e9d 100644
---- a/Spec/114.md
-+++ b/Spec/114.md
-@@ -1,5 +1,19 @@
- ## §114 Баг-трекер в игре (iteration 114)
- 
-+**Production migration — 2026-09-10.** Текущее единое хранилище — PostgreSQL
-+самостоятельного Flashback в Сингапуре. UI:
-+`https://flashback.62-146-235-120.sslip.io`; API: тот же origin + `/api/bugs/v1`.
-+Старый production `/api/bugs/v1` прозрачно проксируется туда, поэтому уже
-+собранная игра продолжает использовать выбранный игровой endpoint; аргумент
-+`-hexlive-bugs-api` по-прежнему переопределяет его. Агенты и build scripts
-+по умолчанию используют прямой новый URL. Авторизации в этом экземпляре нет;
-+прежние Bearer-заголовки совместимы. `/admin/bugs` и ссылки на карточки
-+перенаправляются в Flashback; старые POST-формы получают 409 с указанием
-+перезагрузить страницу. Сохранённая SQLite — архив перед переключением,
-+не действующее хранилище. Ниже описан исторический встроенный трекер;
-+HTTP-поля, статусы, ревизии, комментарии и семантика операций сохранены.
-+
-+
- Микро-джира между игроком и агентом, не выходя из Play: кнопка **Bug tracker**
- в левой дебаг-панели открывает окно, где игрок текстом описывает баг и жмёт
- «Отправить». Единое хранилище — SQLite `hexlive-bugs.sqlite3` рядом с серверным
 diff --git a/Tools/build_release.py b/Tools/build_release.py
-index c959ffd0c..e6058a87c 100755
+index c959ffd0c..d7aabd3dd 100755
 --- a/Tools/build_release.py
 +++ b/Tools/build_release.py
 @@ -24,7 +24,7 @@ DEFAULT_DISTRIBUTION = Path.home() / "hex-girls"
@@ -137,8 +121,17 @@ index c959ffd0c..e6058a87c 100755
  UNITY_LOCK = ROOT / "Temp" / "UnityLockfile"
  UNITY_METHOD = "HexLive.UnityDebug.Editor.HexLiveReleaseBuilder.BuildMacOS"
  UNITY_PREFS_DOMAIN = "com.unity3d.UnityEditor5.x"
+@@ -126,7 +126,7 @@ def read_json(path: Path) -> dict[str, Any]:
+ 
+ def read_bug_tracker() -> dict[str, Any]:
+     try:
+-        with urllib.request.urlopen(BUG_API + "/reports", timeout=15) as response:
++        with urllib.request.urlopen(urllib.request.Request(BUG_API + "/reports", headers={"Authorization": "Bearer " + os.environ.get("HEXLIVE_BUG_TOKEN", "").strip()}), timeout=15) as response:
+             reports = json.loads(response.read().decode("utf-8"))
+     except Exception as error:
+         raise RuntimeError(f"Could not read bug API {BUG_API}: {error}") from error
 diff --git a/Tools/build_release_windows.py b/Tools/build_release_windows.py
-index 8921082d2..bd0826490 100644
+index 8921082d2..34d3625bd 100644
 --- a/Tools/build_release_windows.py
 +++ b/Tools/build_release_windows.py
 @@ -46,7 +46,7 @@ DEFAULT_DISTRIBUTION = Path.home() / "hex-girls"
@@ -150,21 +143,49 @@ index 8921082d2..bd0826490 100644
  REPOSITORY_BUG_TOKEN = ROOT / ".agents" / "skills" / "hexlive-bug-tracker" / "bug-token"
  USER_BUG_TOKEN = Path.home() / ".config" / "hexlive" / "bug-token"
  UNITY_LOCK = ROOT / "Temp" / "UnityLockfile"
+@@ -191,10 +191,16 @@ def read_bug_tracker_with_windows_tls(url: str) -> Any:
+         "15",
+         "--header",
+         "Accept: application/json",
++        "--config",
++        "-",
+         url,
+     ]
++    token = os.environ.get("HEXLIVE_BUG_TOKEN", "").strip()
++    if any(c in token for c in '\r\n"\\'):
++        raise RuntimeError("Invalid bug access token")
+     result = subprocess.run(
+         command,
++        input=('header = "Authorization: Bearer ' + token + '"\n').encode(),
+         cwd=ROOT,
+         stdout=subprocess.PIPE,
+         stderr=subprocess.PIPE,
+@@ -215,7 +221,7 @@ def read_bug_tracker() -> dict[str, Any]:
+         if os.name == "nt":
+             reports = read_bug_tracker_with_windows_tls(url)
+         else:
+-            with urllib.request.urlopen(url, timeout=15) as response:
++            with urllib.request.urlopen(urllib.request.Request(url, headers={"Authorization": "Bearer " + os.environ.get("HEXLIVE_BUG_TOKEN", "").strip()}), timeout=15) as response:
+                 reports = json.loads(response.read().decode("utf-8"))
+     except Exception as error:
+         raise RuntimeError(f"Could not read bug API {BUG_API}: {error}") from error
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 0bf5f766a..74a916e6a 100644
 --- a/CLAUDE.md
 +++ b/CLAUDE.md
-@@ -49,7 +49,10 @@
+@@ -49,7 +49,10 @@ obstacle-блокировки, зоны падения/спавна, пути и
  
  ## ⭐ Server bug tracker (spec §114)
  
 -The player files bugs from inside the game into the central server SQLite store.
 +The player files bugs into Flashback PostgreSQL in Singapore:
 +`https://flashback.62-146-235-120.sslip.io/api/bugs/v1`. The previous production
-+API address proxies to it, so installed games and running agents keep working.
-+The old SQLite store is retired; Flashback currently requires no authentication.
++API address proxies to it. Updated clients send Bearer on every request; older game builds need the authenticated creation fix.
++The old SQLite store is retired. Flashback requires Bearer authentication on every request, including GET and creation. Agent keys cannot confirm fixed, archive, delete, or manage keys.
  When the user says «разбери баги» / «посмотри баг-трекер», use the project skill
  `.agents/skills/hexlive-bug-tracker/SKILL.md`; do not read the retired reports
  array in `BUGS.json`.
-@@ -77,11 +80,12 @@
+@@ -77,11 +80,12 @@ array in `BUGS.json`.
    history flag for a confirmed fix. Permanent deletion is an explicit player
    or administrator action, never part of the agent workflow.
  - The game polls `/api/bugs/v1/reports` and sends mutations to the same API;

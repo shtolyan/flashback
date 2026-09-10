@@ -3,6 +3,7 @@ import Constants from "expo-constants";
 import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ChangeEvent } from "@flashback/contracts";
+import { getBearer, invalidateAuth } from "./credentials";
 export function apiOrigin() {
   const configured = process.env.EXPO_PUBLIC_API_URL;
   if (configured) return configured.replace(/\/$/, "");
@@ -34,15 +35,21 @@ export async function api<T>(
     );
   const response = await fetch(origin + path, {
     method: method ?? (body === undefined ? "GET" : "POST"),
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(getBearer() ? { Authorization: `Bearer ${getBearer()}` } : {}),
+    },
+    credentials: "include",
     body: body === undefined ? undefined : JSON.stringify(body),
     signal: signal ?? AbortSignal.timeout(15000),
   });
   if (!response.ok) {
+    if (response.status === 401 && path !== "/api/auth/session")
+      invalidateAuth();
     const data = await response.json().catch(() => ({}));
     throw new RequestError(
       response.status,
-      response.status === 409
+      response.status === 409 && path.startsWith("/api/bugs/v1/reports/")
         ? "Баг уже изменился. Ваш текст сохранён в редакторе. Обновите версию перед повторным сохранением."
         : (data.error ?? `Ошибка ${response.status}`),
     );
@@ -62,13 +69,25 @@ export function useLive() {
         predicate: (q) =>
           ["list", "report", "commit"].includes(String(q.queryKey[0])),
       });
-    function connect() {
+    async function connect() {
       if (stopped) return;
       const origin = apiOrigin();
       if (!origin) return;
       clearTimeout(timer);
+      let ticket: string;
+      try {
+        ticket = (await api<{ ticket: string }>("/api/auth/socket-ticket", {}))
+          .ticket;
+      } catch {
+        if (!stopped) timer = setTimeout(connect, 2000);
+        return;
+      }
+      if (stopped) return;
       const next = new WebSocket(
-        origin.replace(/^http/, "ws") + base + "/events",
+        origin.replace(/^http/, "ws") +
+          base +
+          "/events?ticket=" +
+          encodeURIComponent(ticket),
       );
       socket = next;
       next.onmessage = (e) => {
@@ -84,9 +103,14 @@ export function useLive() {
         }
         client.invalidateQueries({ queryKey: ["list"] });
         client.invalidateQueries({ queryKey: ["report", event.id] });
+        client.invalidateQueries({ queryKey: ["report-access", event.id] });
       };
-      next.onclose = () => {
+      next.onclose = (event) => {
         if (next !== socket) return;
+        if (event.code === 4401) {
+          invalidateAuth();
+          return;
+        }
         setOnline(false);
         if (!stopped) timer = setTimeout(connect, 2000);
       };

@@ -35,6 +35,22 @@ const migrations = [
    CREATE TABLE commit_patches (sha TEXT PRIMARY KEY, data JSONB NOT NULL);
    CREATE TABLE import_history (fingerprint TEXT PRIMARY KEY, "importedUtc" TIMESTAMPTZ NOT NULL DEFAULT now(), count INTEGER NOT NULL);
    CREATE INDEX reports_status_archive_id ON reports(archived,status,id DESC);`,
+  `CREATE TABLE access_tokens (
+    id UUID PRIMARY KEY, name TEXT NOT NULL, secret_hash TEXT NOT NULL UNIQUE,
+    is_admin BOOLEAN NOT NULL DEFAULT false, allowed_statuses TEXT[] NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(), created_by UUID REFERENCES access_tokens(id),
+    revoked_at TIMESTAMPTZ, last_used_at TIMESTAMPTZ);
+   CREATE TABLE access_sessions (
+    secret_hash TEXT PRIMARY KEY, token_id UUID NOT NULL REFERENCES access_tokens(id),
+    expires_at TIMESTAMPTZ NOT NULL);
+   CREATE INDEX access_sessions_token ON access_sessions(token_id);
+   CREATE TABLE report_access (
+    id BIGSERIAL PRIMARY KEY, report_id INTEGER NOT NULL,
+    token_id UUID NOT NULL REFERENCES access_tokens(id), token_name TEXT NOT NULL,
+    action TEXT NOT NULL, status TEXT, at TIMESTAMPTZ NOT NULL DEFAULT now());
+   CREATE INDEX report_access_report ON report_access(report_id,id DESC);
+   CREATE TABLE patch_access (sha TEXT PRIMARY KEY REFERENCES commit_patches(sha) ON DELETE CASCADE,
+    token_id UUID NOT NULL REFERENCES access_tokens(id), token_name TEXT NOT NULL, at TIMESTAMPTZ NOT NULL DEFAULT now());`,
 ];
 
 export async function migrate() {

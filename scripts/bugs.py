@@ -23,9 +23,8 @@ def call(args,method,path,payload=None,auth=False):
     data=None if payload is None else json.dumps(payload,ensure_ascii=False).encode()
     headers={"Accept":"application/json"}
     if data is not None: headers["Content-Type"]="application/json"
-    if auth:
-        value=token(args)
-        if value: headers["Authorization"]="Bearer "+value
+    value=token(args)
+    if value: headers["Authorization"]="Bearer "+value
     request=urllib.request.Request(args.api.rstrip("/")+path,data=data,headers=headers,method=method)
     try:
         with urllib.request.urlopen(request,timeout=15) as response:

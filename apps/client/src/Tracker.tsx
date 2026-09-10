@@ -30,6 +30,10 @@ import FlaskConical from "lucide-react-native/icons/flask-conical";
 import ArrowDown from "lucide-react-native/icons/arrow-down";
 import ArrowLeft from "lucide-react-native/icons/arrow-left";
 import Layers from "lucide-react-native/icons/layers";
+import KeyRound from "lucide-react-native/icons/key-round";
+import LogOut from "lucide-react-native/icons/log-out";
+import { useAccess } from "./Auth";
+import AccessKeys from "./AccessKeys";
 import type {
   Page,
   View as ViewName,
@@ -51,6 +55,8 @@ const headings: Record<ViewName, string> = {
   archive: "Архив",
 };
 export default function Tracker() {
+  const { key: accessKey, logout, canStatus } = useAccess();
+  const [accessOpen, setAccessOpen] = useState(false);
   const { width } = useWindowDimensions();
   const [mounted, setMounted] = useState(false);
   const mobile = !mounted || width < 820;
@@ -114,6 +120,7 @@ export default function Tracker() {
   const data = query.data;
   useEffect(() => {
     if (
+      data &&
       !location.bug &&
       returnPosition?.key === params &&
       !query.isPlaceholderData
@@ -121,12 +128,14 @@ export default function Tracker() {
       const pos = returnPosition;
       requestAnimationFrame(() =>
         requestAnimationFrame(() => {
-          scroll.current?.scrollTo({ y: pos.y, animated: false });
-          returnPosition = null;
+          if (scroll.current) {
+            scroll.current.scrollTo({ y: pos.y, animated: false });
+            returnPosition = null;
+          }
         }),
       );
     }
-  }, [location.bug, params, query.isPlaceholderData]);
+  }, [location.bug, params, query.isPlaceholderData, !!data]);
   useEffect(() => {
     if (data && !query.isPlaceholderData && data.page !== location.page)
       set({ page: data.page });
@@ -172,7 +181,9 @@ export default function Tracker() {
     scroll.current?.scrollTo({ y: 0, animated: false });
   }
   function open(r: ReportSummary) {
-    returnPosition = { key: params, y: scrollY.current };
+    const node =
+      Platform.OS === "web" ? scroll.current?.getScrollableNode() : null;
+    returnPosition = { key: params, y: node?.scrollTop ?? scrollY.current };
     lastSelected.current = r.id;
     set({ bug: r.id }, true);
   }
@@ -310,6 +321,28 @@ export default function Tracker() {
           </Pressable>
         );
       })}
+      <View style={{ marginTop: 20, gap: 8 }}>
+        {accessKey.isAdmin && (
+          <Button
+            icon={KeyRound}
+            onPress={() => {
+              setMenu(false);
+              setAccessOpen(true);
+            }}
+          >
+            Ключи доступа
+          </Button>
+        )}
+        <T style={{ fontSize: 11, color: c.dim }}>{accessKey.name}</T>
+        <Button
+          icon={LogOut}
+          onPress={() => {
+            void logout().catch(() => {});
+          }}
+        >
+          Выйти
+        </Button>
+      </View>
       <View style={{ flex: 1, minHeight: 36 }} />
       <View
         style={{
@@ -397,6 +430,7 @@ export default function Tracker() {
             <Button
               icon={Plus}
               variant="primary"
+              disabled={!canStatus("created")}
               onPress={() => setCreating(true)}
             >
               {mobile ? "Новый" : "Новый баг"}
@@ -846,6 +880,7 @@ export default function Tracker() {
             {sidebar(true)}
           </Overlay>
         )}
+        {accessOpen && <AccessKeys onClose={() => setAccessOpen(false)} />}
         {location.bug && (
           <Detail
             key={location.bug}

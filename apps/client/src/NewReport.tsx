@@ -8,7 +8,11 @@ import type { Report } from "@flashback/contracts";
 import { api, base } from "./api";
 import { c, s, T, Button, Input, Label } from "./ui";
 import Overlay from "./Overlay";
+import { authCleared } from "./credentials";
 let draft = { text: "", context: "", reportedInVersion: "" };
+authCleared.add(() => {
+  draft = { text: "", context: "", reportedInVersion: "" };
+});
 export default function NewReport({
   onClose,
   onCreated,

@@ -29,13 +29,20 @@ function read(url: string): Location {
 }
 const web = Platform.OS === "web";
 export function useLocation() {
-  const [location, setLocation] = useState<Location>(initial);
+  const [location, setLocation] = useState<Location>(() =>
+    web && typeof window !== "undefined" ? read(window.location.href) : initial,
+  );
   useEffect(() => {
     if (web) {
+      const previousRestoration = window.history.scrollRestoration;
+      window.history.scrollRestoration = "manual";
       setLocation(read(window.location.href));
       const pop = () => setLocation(read(window.location.href));
       window.addEventListener("popstate", pop);
-      return () => window.removeEventListener("popstate", pop);
+      return () => {
+        window.removeEventListener("popstate", pop);
+        window.history.scrollRestoration = previousRestoration;
+      };
     }
     Linking.getInitialURL().then((url) => {
       if (url) setLocation(read(url));

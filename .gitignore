@@ -14,3 +14,5 @@ playwright-report/
 .DS_Store
 *.log
 bug-token
+
+.playwright/

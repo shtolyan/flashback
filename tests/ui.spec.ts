@@ -195,14 +195,115 @@ test("offline shell and reconnect show missed updates", async ({
     });
     await page.reload();
     await expect(
-      page.getByRole("heading", { name: "Открытые", exact: true }),
+      page.getByText("Нет соединения с трекером. Повторите подключение."),
     ).toBeVisible();
     await context.setOffline(false);
+    await page.getByRole("button", { name: "Повторить подключение" }).click();
     await expect(
       page.getByTestId("bug-" + r.id).getByText("After reconnect"),
     ).toBeVisible({ timeout: 20000 });
   } finally {
     await context.setOffline(false);
     await request.delete(api + "/reports/" + r.id);
+  }
+});
+
+test("access-key UI, persistent login, restricted statuses and remote revocation", async ({
+  page,
+  request,
+  browser,
+}) => {
+  let keyId: string | undefined, reportId: number | undefined;
+  const member = await browser.newContext({
+    baseURL: "http://localhost:4310",
+    storageState: { cookies: [], origins: [] },
+  });
+  const memberPage = await member.newPage();
+  try {
+    await page.goto("/");
+    await page
+      .getByRole("button", { name: "Ключи доступа", exact: true })
+      .click();
+    const name = "UI Agent " + Date.now();
+    await page.getByLabel("Название ключа").fill(name);
+    await page
+      .getByRole("button", { name: "Создать ключ", exact: true })
+      .click();
+    const secretField = page.getByLabel("Созданный токен");
+    await expect(secretField).toBeVisible();
+    const secret = await secretField.inputValue();
+    const keys = await (await request.get("/api/access-keys")).json();
+    keyId = keys.find((k: any) => k.name === name).id;
+    await page.getByRole("button", { name: "Готово, скрыть ключ" }).click();
+    await expect(secretField).toHaveCount(0);
+    await memberPage.goto("/");
+    await expect(
+      memberPage.getByRole("heading", { name: "Вход по ключу" }),
+    ).toBeVisible();
+    await memberPage.getByLabel("Ключ доступа", { exact: true }).fill(secret);
+    await memberPage
+      .getByRole("button", { name: "Войти", exact: true })
+      .click();
+    await expect(memberPage.getByTestId("bug-list")).toBeVisible();
+    await memberPage.reload();
+    await expect(memberPage.getByTestId("bug-list")).toBeVisible();
+    await expect(
+      memberPage.getByRole("button", { name: "Ключи доступа", exact: true }),
+    ).toHaveCount(0);
+    await memberPage
+      .getByRole("button", { name: "Выйти", exact: true })
+      .click();
+    await expect(
+      memberPage.getByRole("heading", { name: "Вход по ключу" }),
+    ).toBeVisible();
+    await memberPage.reload();
+    await expect(
+      memberPage.getByRole("heading", { name: "Вход по ключу" }),
+    ).toBeVisible();
+    await memberPage.getByLabel("Ключ доступа", { exact: true }).fill(secret);
+    await memberPage
+      .getByRole("button", { name: "Войти", exact: true })
+      .click();
+    await expect(memberPage.getByTestId("bug-list")).toBeVisible();
+
+    await memberPage
+      .getByRole("button", { name: "Новый баг", exact: true })
+      .click();
+    await memberPage
+      .getByLabel("Описание нового бага")
+      .fill("Access UI fixture");
+    await memberPage
+      .getByRole("button", { name: "Создать баг", exact: true })
+      .click();
+    await expect(memberPage.getByRole("dialog")).toHaveAttribute(
+      "aria-label",
+      /Баг #/,
+    );
+    reportId = Number(new URL(memberPage.url()).searchParams.get("bug"));
+    await expect(
+      memberPage.getByRole("button", {
+        name: "Статус: Исправлен",
+        exact: true,
+      }),
+    ).toBeDisabled();
+    const attribution = await (
+      await request.get(api + "/reports/" + reportId + "/access")
+    ).json();
+    expect(attribution.created.name).toBe(name);
+    await page
+      .getByRole("button", { name: "Отозвать ключ " + name, exact: true })
+      .click();
+    await page
+      .getByRole("button", { name: "Да, отозвать", exact: true })
+      .click();
+    await expect(
+      memberPage.getByRole("heading", { name: "Вход по ключу" }),
+    ).toBeVisible({ timeout: 10000 });
+    keyId = undefined;
+    await memberPage.screenshot({ path: "test-results/login.png" });
+  } finally {
+    await member.close();
+    if (keyId) await request.post("/api/access-keys/" + keyId + "/revoke");
+    if (reportId) await request.delete(api + "/reports/" + reportId);
   }
 });
