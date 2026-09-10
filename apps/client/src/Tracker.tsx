@@ -50,11 +50,6 @@ const headings: Record<ViewName, string> = {
   fixed: "Исправленные",
   archive: "Архив",
 };
-const descriptions: Record<ViewName, string> = {
-  open: "От первого репорта до последней проверки.",
-  fixed: "Проверено. Исправлено. Можно двигаться дальше.",
-  archive: "История завершённых исправлений.",
-};
 export default function Tracker() {
   const { width } = useWindowDimensions();
   const [mounted, setMounted] = useState(false);
@@ -356,7 +351,7 @@ export default function Tracker() {
               {instance.data?.name ?? "Flashback"}
             </T>
             <T style={{ color: c.dim }}>/</T>
-            <T style={{ fontSize: 12 }}>
+            <T accessibilityRole="header" style={{ fontSize: 12 }}>
               {location.view === "open" ? "Открытые" : headings[location.view]}
             </T>
             <View style={s.grow} />
@@ -378,102 +373,16 @@ export default function Tracker() {
           </View>
           <View
             style={{
-              paddingHorizontal: mobile ? 20 : 38,
-              paddingTop: mobile ? 24 : 32,
-              paddingBottom: 22,
-            }}
-          >
-            <View style={[s.row, { alignItems: "center" }]}>
-              <T
-                accessibilityRole="header"
-                style={{
-                  fontSize: mobile ? 25 : 30,
-                  lineHeight: 38,
-                  fontWeight: "600",
-                  letterSpacing: -0.8,
-                }}
-              >
-                {headings[location.view]}
-              </T>
-              <View
-                style={{
-                  paddingHorizontal: 8,
-                  paddingVertical: 2,
-                  borderWidth: 1,
-                  borderColor: c.line,
-                  borderRadius: 7,
-                }}
-              >
-                <T style={{ color: c.muted, fontSize: 12 }}>
-                  {data?.total ?? "—"}
-                </T>
-              </View>
-            </View>
-            <T muted style={{ fontSize: 13, marginTop: 5 }}>
-              {descriptions[location.view]}
-            </T>
-          </View>
-          <View
-            style={{
               paddingHorizontal: mobile ? 16 : 38,
-              gap: 16,
-              paddingBottom: 18,
+              flexDirection: mobile ? "column" : "row",
+              alignItems: mobile ? "stretch" : "center",
+              gap: 10,
+              paddingVertical: 12,
             }}
           >
-            <View
-              style={[
-                s.row,
-                {
-                  backgroundColor: c.surface,
-                  borderWidth: 1,
-                  borderColor: c.line,
-                  borderRadius: 9,
-                  paddingHorizontal: 12,
-                },
-              ]}
-            >
-              <Search size={16} color={c.dim} />
-              <TextInput
-                ref={searchRef}
-                accessibilityLabel="Поиск багов"
-                value={search}
-                onChangeText={setSearch}
-                placeholder="Найти баг по тексту, контексту или номеру…"
-                placeholderTextColor={c.dim}
-                style={{
-                  flex: 1,
-                  minWidth: 0,
-                  color: c.text,
-                  height: 44,
-                  fontSize: 13,
-                }}
-              />
-              {search ? (
-                <Button
-                  icon={X}
-                  label="Очистить поиск"
-                  onPress={() => setSearch("")}
-                />
-              ) : !mobile ? (
-                <View
-                  style={[
-                    s.row,
-                    {
-                      gap: 3,
-                      borderWidth: 1,
-                      borderColor: c.line,
-                      paddingHorizontal: 5,
-                      borderRadius: 4,
-                    },
-                  ]}
-                >
-                  <Command size={11} color={c.dim} />
-                  <T style={{ fontSize: 10, color: c.dim }}>K</T>
-                </View>
-              ) : null}
-            </View>
             <ScrollView
               horizontal
+              style={{ flex: mobile ? undefined : 1, minWidth: 0 }}
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={{ gap: 7, alignItems: "center" }}
             >
@@ -545,6 +454,60 @@ export default function Tracker() {
                 );
               })}
             </ScrollView>
+            <View
+              style={[
+                s.row,
+                {
+                  width: mobile ? "100%" : Math.min(320, width * 0.24),
+                  flexShrink: 0,
+                  backgroundColor: c.surface,
+                  borderWidth: 1,
+                  borderColor: c.line,
+                  borderRadius: 9,
+                  paddingHorizontal: 12,
+                },
+              ]}
+            >
+              <Search size={16} color={c.dim} />
+              <TextInput
+                ref={searchRef}
+                accessibilityLabel="Поиск багов"
+                value={search}
+                onChangeText={setSearch}
+                placeholder="Поиск по тексту или номеру…"
+                placeholderTextColor={c.dim}
+                style={{
+                  flex: 1,
+                  minWidth: 0,
+                  color: c.text,
+                  height: 38,
+                  fontSize: 13,
+                }}
+              />
+              {search ? (
+                <Button
+                  icon={X}
+                  label="Очистить поиск"
+                  onPress={() => setSearch("")}
+                />
+              ) : !mobile ? (
+                <View
+                  style={[
+                    s.row,
+                    {
+                      gap: 3,
+                      borderWidth: 1,
+                      borderColor: c.line,
+                      paddingHorizontal: 5,
+                      borderRadius: 4,
+                    },
+                  ]}
+                >
+                  <Command size={11} color={c.dim} />
+                  <T style={{ fontSize: 10, color: c.dim }}>K</T>
+                </View>
+              ) : null}
+            </View>
           </View>
           <View
             style={[

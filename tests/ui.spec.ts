@@ -195,7 +195,7 @@ test("offline shell and reconnect show missed updates", async ({
     });
     await page.reload();
     await expect(
-      page.getByText("Открытые баги", { exact: true }).last(),
+      page.getByRole("heading", { name: "Открытые", exact: true }),
     ).toBeVisible();
     await context.setOffline(false);
     await expect(
