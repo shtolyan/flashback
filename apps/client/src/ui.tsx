@@ -73,6 +73,7 @@ export function Button({
   label,
   style,
   testID,
+  expanded,
 }: React.PropsWithChildren<{
   onPress: () => void;
   icon?: LucideIcon;
@@ -82,6 +83,7 @@ export function Button({
   label?: string;
   style?: StyleProp<ViewStyle>;
   testID?: string;
+  expanded?: boolean;
 }>) {
   const primary = variant === "primary";
   return (
@@ -91,7 +93,8 @@ export function Button({
       accessibilityLabel={
         label ?? (typeof children === "string" ? children : undefined)
       }
-      accessibilityState={{ disabled: disabled || loading }}
+      accessibilityState={{ disabled: disabled || loading, expanded }}
+      aria-expanded={expanded}
       disabled={disabled || loading}
       onPress={onPress}
       style={({ pressed, hovered }: any) => [

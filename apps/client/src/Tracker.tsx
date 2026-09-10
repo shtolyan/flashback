@@ -53,7 +53,6 @@ const headings: Record<ViewName, string> = {
 export default function Tracker() {
   const { width } = useWindowDimensions();
   const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
   const mobile = !mounted || width < 820;
   const { location, set, close } = useLocation();
   const online = useLive();
@@ -61,6 +60,29 @@ export default function Tracker() {
     [menu, setMenu] = useState(false),
     [creating, setCreating] = useState(false),
     [toast, setToast] = useState("");
+  useEffect(() => {
+    if (Platform.OS === "web") {
+      try {
+        setCollapsed(
+          localStorage.getItem("flashback.sidebar.collapsed") === "true",
+        );
+      } catch {}
+    }
+    setMounted(true);
+  }, []);
+  function toggleMenu() {
+    if (mobile) {
+      setMenu(true);
+      return;
+    }
+    const next = !collapsed;
+    setCollapsed(next);
+    if (Platform.OS === "web") {
+      try {
+        localStorage.setItem("flashback.sidebar.collapsed", String(next));
+      } catch {}
+    }
+  }
   const [search, setSearch] = useState(location.q);
   const searchRef = useRef<TextInput>(null);
   const scroll = useRef<ScrollView>(null);
@@ -156,6 +178,7 @@ export default function Tracker() {
   }
   const sidebar = (drawer = false) => (
     <View
+      testID="sidebar"
       style={{
         width: drawer ? undefined : 234,
         flex: drawer ? 1 : undefined,
@@ -341,12 +364,20 @@ export default function Tracker() {
             ]}
           >
             <Button
-              icon={mobile ? Menu : collapsed ? Menu : PanelLeftClose}
-              label="Меню"
-              onPress={() =>
-                mobile ? setMenu(true) : setCollapsed(!collapsed)
+              icon={mobile || collapsed ? Menu : PanelLeftClose}
+              label={
+                mobile
+                  ? "Меню"
+                  : collapsed
+                    ? "Развернуть меню"
+                    : "Свернуть меню"
               }
-            />
+              expanded={mobile ? menu : !collapsed}
+              variant="outline"
+              onPress={toggleMenu}
+            >
+              {!mobile && "Меню"}
+            </Button>
             <T style={{ fontSize: 12, color: c.dim }}>
               {instance.data?.name ?? "Flashback"}
             </T>
