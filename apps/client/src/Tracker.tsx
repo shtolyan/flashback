@@ -196,7 +196,7 @@ export default function Tracker() {
       testID="sidebar"
       style={{
         width: drawer ? undefined : 234,
-        flex: drawer ? 1 : undefined,
+        flexGrow: drawer ? 1 : undefined,
         flexShrink: 0,
         backgroundColor: c.sidebar,
         padding: 18,
@@ -885,7 +885,12 @@ export default function Tracker() {
         </View>
         {mobile && menu && (
           <Overlay label="Навигация" onClose={() => setMenu(false)}>
-            {sidebar(true)}
+            <ScrollView
+              style={{ flex: 1 }}
+              contentContainerStyle={{ flexGrow: 1 }}
+            >
+              {sidebar(true)}
+            </ScrollView>
           </Overlay>
         )}
         {accessOpen && <AccessKeys onClose={() => setAccessOpen(false)} />}

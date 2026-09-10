@@ -40,16 +40,7 @@ export default function Overlay({
         }
       }}
     >
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          height: center ? "auto" : "100%",
-          maxHeight: center ? "90dvh" : undefined,
-        }}
-      >
-        {children}
-      </div>
+      <div className="flashback-panel-content">{children}</div>
     </dialog>
   );
 }
