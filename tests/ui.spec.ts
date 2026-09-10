@@ -79,6 +79,9 @@ test("create, edit, comment, confirm, archive and delete through UI", async ({
     await page
       .getByRole("button", { name: "Всё исправлено", exact: true })
       .click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page).not.toHaveURL(/bug=/);
+    await page.goto("/?view=fixed&bug=" + id);
     await page.getByRole("button", { name: "В архив", exact: true }).click();
     await expect(
       page.getByRole("button", { name: "Восстановить из архива" }),

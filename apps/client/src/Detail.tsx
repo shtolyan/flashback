@@ -345,10 +345,15 @@ export default function Detail({
                     disabled={!!busy || !canStatus("fixed")}
                     loading={busy === "confirm"}
                     onPress={() =>
-                      perform("confirm", "/transition", {
-                        action: "confirm",
-                        expectedRevision: r.revision,
-                      })
+                      perform(
+                        "confirm",
+                        "/transition",
+                        {
+                          action: "confirm",
+                          expectedRevision: r.revision,
+                        },
+                        onClose,
+                      )
                     }
                   >
                     Всё исправлено
@@ -418,10 +423,15 @@ export default function Detail({
                         !canStatus(status),
                     }}
                     onPress={() =>
-                      perform("status", "", {
-                        status,
-                        expectedRevision: r.revision,
-                      })
+                      perform(
+                        "status",
+                        "",
+                        {
+                          status,
+                          expectedRevision: r.revision,
+                        },
+                        status === "fixed" ? onClose : undefined,
+                      )
                     }
                     style={{
                       borderWidth: 1,
