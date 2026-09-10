@@ -1,3 +1,6 @@
 :root{color-scheme:dark}*{box-sizing:border-box}body{background:#111216}button,input,textarea{font:inherit}*:focus-visible{outline:2px solid #b4a8ff;outline-offset:3px}::selection{background:#60579b;color:white}::-webkit-scrollbar{width:7px;height:7px}::-webkit-scrollbar-thumb{background:#363840;border-radius:8px}dialog.flashback-panel{margin:0 0 0 auto;padding:0;border:0;border-left:1px solid #30313a;background:#17181e;color:#f3f3f7;width:min(760px,100vw);max-width:100vw;height:100dvh;max-height:100dvh;overflow:hidden;box-shadow:-24px 0 80px #0005}dialog.flashback-panel::backdrop{background:#0008;backdrop-filter:blur(3px)}dialog.flashback-panel[open]{animation:panel-in .18s ease-out}dialog.flashback-panel.center{margin:auto;height:auto;max-height:90dvh;width:min(620px,94vw);border:1px solid #353641;border-radius:18px} @keyframes panel-in{from{transform:translateX(24px);opacity:.5}to{transform:translateX(0);opacity:1}}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 
 input[aria-label="Поиск багов"]:focus{outline:none}
+
+/* Fill the current iOS/PWA viewport, including the area behind the home indicator. */
+html body #root{height:100vh;height:100dvh;min-height:0;flex:none}

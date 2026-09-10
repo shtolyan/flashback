@@ -8,7 +8,10 @@ import {
   Platform,
   TextInput,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import {
+  SafeAreaView,
+  useSafeAreaInsets,
+} from "react-native-safe-area-context";
 import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import Archive from "lucide-react-native/icons/archive";
 import Inbox from "lucide-react-native/icons/inbox";
@@ -58,6 +61,7 @@ export default function Tracker() {
   const { key: accessKey, logout, canStatus } = useAccess();
   const [accessOpen, setAccessOpen] = useState(false);
   const { width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
   const [mounted, setMounted] = useState(false);
   const mobile = !mounted || width < 820;
   const { location, set, close } = useLocation();
@@ -380,7 +384,7 @@ export default function Tracker() {
   return (
     <SafeAreaView
       style={{ flex: 1, backgroundColor: c.bg }}
-      edges={["top", "bottom"]}
+      edges={["top", "left", "right"]}
     >
       <View style={{ flex: 1, flexDirection: "row" }}>
         {!mobile && !collapsed && sidebar()}
@@ -811,14 +815,18 @@ export default function Tracker() {
             )}
           </ScrollView>
           <View
+            testID="pagination"
             style={[
               s.row,
               {
                 paddingHorizontal: mobile ? 16 : 38,
-                paddingVertical: 12,
+                paddingTop: mobile ? 2 : 12,
+                paddingBottom: mobile
+                  ? Math.max(2, Math.min(insets.bottom, 12))
+                  : 12,
                 borderTopWidth: 1,
                 borderTopColor: c.line,
-                minHeight: 62,
+                minHeight: mobile ? 44 : 62,
               },
             ]}
           >
