@@ -1,0 +1,5 @@
+# Add this site alongside existing sites on the Singapore host.
+flashback.62-146-235-120.sslip.io {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:4310
+}
