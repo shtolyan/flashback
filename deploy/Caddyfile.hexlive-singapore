@@ -1,0 +1,15 @@
+vmi3529459.contaboserver.net {
+	encode zstd gzip
+    @retiredTracker path /api/bugs/v1 /api/bugs/v1/* /admin/bugs /admin/bugs/*
+    handle @retiredTracker {
+        respond "Legacy bug tracker retired. Use https://flashback.62-146-235-120.sslip.io. Report IDs on this legacy Singapore instance may differ." 410
+    }
+    handle {
+        reverse_proxy 127.0.0.1:5123
+    }
+}
+# Add this site alongside existing sites on the Singapore host.
+flashback.62-146-235-120.sslip.io {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:4310
+}

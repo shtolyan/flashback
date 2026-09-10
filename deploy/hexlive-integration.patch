@@ -1,8 +1,8 @@
 diff --git a/.agents/skills/hexlive-bug-tracker/SKILL.md b/.agents/skills/hexlive-bug-tracker/SKILL.md
-index f54a5563f..04986a563 100644
+index f54a5563f..d44ae6558 100644
 --- a/.agents/skills/hexlive-bug-tracker/SKILL.md
 +++ b/.agents/skills/hexlive-bug-tracker/SKILL.md
-@@ -5,23 +5,27 @@ description: Read and mutate HexLive bug reports in the central server tracker,
+@@ -5,23 +5,32 @@ description: Read and mutate HexLive bug reports in the central server tracker,
  
  # HexLive server bug tracker
  
@@ -37,7 +37,12 @@ index f54a5563f..04986a563 100644
 +The player key has all statuses but cannot manage access keys. A distinct admin
 +key manages keys in Flashback. Never print token files or include secrets in reports.
 +
-+Old API URLs remain proxied, but old clients must send authentication on reads
++Only the old New York HTTPS API remains proxied. Singapore legacy URLs and
++direct game-server ports return 410; do not retry or restore SQLite writers.
++The embedded server implementation has been deleted. Singapore legacy IDs
++373–377 moved to 398–402; IDs 378–397 were preserved. Always reload the
++Flashback card before editing; old Singapore #373–375 refer to different bugs.
++Old clients must send authentication on reads
 +and creates too. The game creation call is updated in source and requires a new
 +player build. Do not make an anonymous compatibility exception.
  
@@ -70,8 +75,36 @@ index 0cab15c92..f01b736ad 100644
      request=urllib.request.Request(args.api.rstrip("/")+path,data=data,headers=headers,method=method)
      try:
          with urllib.request.urlopen(request,timeout=15) as response:
+diff --git a/AGENTS.md b/AGENTS.md
+index 431695225..c815be721 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -66,7 +66,11 @@ python3 Tools/unity_mcp_lease.py acquire --agent <stable-agent-task-name> --task
+ 
+ At the start of every bug-fixing session, and whenever the user asks to inspect
+ or fix bugs, use `.agents/skills/hexlive-bug-tracker/SKILL.md`. The source of
+-truth is the production server SQLite database exposed at `/api/bugs/v1`.
++truth is Flashback PostgreSQL in Singapore, exposed at
++`https://flashback.62-146-235-120.sslip.io/api/bugs/v1`. The old production
++New York HTTPS `/api/bugs/v1` route proxies to this same API. Direct game-server
++routes and the old Singapore hostname return 410. The embedded SQLite tracker
++has been removed; archived snapshots are not writable runtime stores.
+ 
+ - The work queue is every report whose `status` is `"created"` or `"rework"`.
+   Before beginning work on one, immediately set its status to `"in_progress"`
+@@ -92,7 +96,8 @@ truth is the production server SQLite database exposed at `/api/bugs/v1`.
+   `ready_for_test → rework → in_progress` for a failed test. `archived` is a
+   separate history flag for a confirmed `fixed` report, not deletion.
+ - Do not edit `BUGS.json` for report work. It is a retired one-shot migration
+-  source. The game and agents read and mutate reports through authenticated
+-  HTTP; the web admin uses the same database.
++  source. The game and agents read and mutate reports through the same HTTP API;
++  all requests require a Flashback Bearer access key. The web UI uses the
++  same PostgreSQL database.
+ - `BUGS.json` remains only the coordination file for the Unity MCP lease below.
+   Never add reports back to it or treat its stale `reports` array as a queue.
 diff --git a/Assets/HexLive/UnityPresentation/UI/BugReportStore.cs b/Assets/HexLive/UnityPresentation/UI/BugReportStore.cs
-index 3edba4982..96e0d6eab 100644
+index 3edba4982..a04a6681a 100644
 --- a/Assets/HexLive/UnityPresentation/UI/BugReportStore.cs
 +++ b/Assets/HexLive/UnityPresentation/UI/BugReportStore.cs
 @@ -177,7 +177,7 @@ namespace HexLive.UnityPresentation.UI
@@ -83,6 +116,58 @@ index 3edba4982..96e0d6eab 100644
              if (report == null) return null;
              EnsureLoaded();
              _model.reports.Add(report);
+@@ -419,13 +419,7 @@ namespace HexLive.UnityPresentation.UI
+             for (var i=0;i+1<args.Length;i++)
+                 if (string.Equals(args[i], argument, StringComparison.OrdinalIgnoreCase))
+                     return args[i+1].TrimEnd('/');
+-            var websocket = new Uri(SessionConfig.ServerUrl ?? ServerBook.ProductionUrl, UriKind.Absolute);
+-            var builder = new UriBuilder(websocket)
+-            {
+-                Scheme = websocket.Scheme == "wss" ? "https" : "http",
+-                Path = "/api/bugs/v1", Query = string.Empty, Fragment = string.Empty
+-            };
+-            return builder.Uri.ToString().TrimEnd('/');
++            return "https://flashback.62-146-235-120.sslip.io/api/bugs/v1";
+         }
+ 
+         private static void Replace(Report report)
+diff --git a/CLAUDE.md b/CLAUDE.md
+index e50222dee..f1e3fc4cc 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -49,7 +49,12 @@ obstacle-блокировки, зоны падения/спавна, пути и
+ 
+ ## ⭐ Server bug tracker (spec §114)
+ 
+-The player files bugs from inside the game into the central server SQLite store.
++The player files bugs into Flashback PostgreSQL in Singapore:
++`https://flashback.62-146-235-120.sslip.io/api/bugs/v1`. The previous production
++New York HTTPS API address proxies to it. Direct game-server APIs and the old Singapore
++hostname return 410. Updated clients use the direct Flashback URL and send Bearer on every
++request; older game builds need the authenticated creation fix.
++The old SQLite store is retired. Flashback requires Bearer authentication on every request, including GET and creation. Agent keys cannot confirm fixed, archive, delete, or manage keys.
+ When the user says «разбери баги» / «посмотри баг-трекер», use the project skill
+ `.agents/skills/hexlive-bug-tracker/SKILL.md`; do not read the retired reports
+ array in `BUGS.json`.
+@@ -77,11 +82,15 @@ array in `BUGS.json`.
+   history flag for a confirmed fix. Permanent deletion is an explicit player
+   or administrator action, never part of the agent workflow.
+ - The game polls `/api/bugs/v1/reports` and sends mutations to the same API;
+-  the web admin at `/admin/bugs` is another surface over the same rows.
++  the New York HTTPS `/admin/bugs` redirects to Flashback; direct game-server
++  routes return 410 and never access tracker storage.
+ - `BUGS.json` is retained only for the Unity MCP lease. Its historical reports
+-  are imported into SQLite once and must not be edited or reintroduced.
++  were migrated to Flashback and must not be edited or reintroduced.
+ 
+-Code: `Server/HexLive.Server/Bugs/` (SQLite + API + admin),
++Tracker: `https://github.com/shtolyan/flashback` (PostgreSQL + compatible API + UI).
++The embedded `Server/HexLive.Server/Bugs/` implementation and SQLite dependency
++have been deleted. `RetiredBugTracker.cs` only returns 410 for stale clients.
++Game client:
+ `UnityPresentation/UI/BugReportStore.cs` (HTTP client),
+ `UI/BugReportPanel.cs` (window), button in `DebugControlsPanel`.
+ Основной текст существующего отчёта игрок может отредактировать из карточки;
 diff --git a/Server/Caddyfile b/Server/Caddyfile
 index 6decee42b..dac2a82d1 100644
 --- a/Server/Caddyfile
@@ -108,8 +193,1703 @@ index 6decee42b..dac2a82d1 100644
 +		reverse_proxy 127.0.0.1:5123
 +	}
  }
+diff --git a/Server/HexLive.Server/Admin/AdminEndpoints.cs b/Server/HexLive.Server/Admin/AdminEndpoints.cs
+index c11eca6ce..884a9b888 100644
+--- a/Server/HexLive.Server/Admin/AdminEndpoints.cs
++++ b/Server/HexLive.Server/Admin/AdminEndpoints.cs
+@@ -6,7 +6,6 @@ using System.Text.Json;
+ using System.Threading;
+ using System.Threading.Tasks;
+ using HexLive.Server.Assets;
+-using HexLive.Server.Bugs;
+ using Microsoft.AspNetCore.Builder;
+ using Microsoft.AspNetCore.Http;
+ 
+@@ -28,8 +27,7 @@ public static class AdminEndpoints
+ 
+     public static void Map(WebApplication app, WorldSupervisor worlds, AdminAccount account,
+         AdminSessions sessions, AdminMailer mailer, CancellationTokenSource lifetime,
+-        AssetRegistryStore assetRegistry, AssetGarmentCatalog assetCatalog, string? adminIconRoot,
+-        BugDatabase bugs)
++        AssetRegistryStore assetRegistry, AssetGarmentCatalog assetCatalog, string? adminIconRoot)
+     {
+         app.MapGet("/admin", (HttpContext context) =>
+         {
+@@ -58,11 +56,9 @@ public static class AdminEndpoints
+ 
+             return Html(AdminPages.Dashboard(
+                 worlds.Host, account, IsInsecure(context), notice,
+-                mailer.CanSendMail, overview, worlds.CatalogRegistryRevision,
+-                bugs.CountActionable()));
++                mailer.CanSendMail, overview, worlds.CatalogRegistryRevision));
+         });
+ 
+-        BugAdminEndpoints.Map(app, bugs, sessions);
+ 
+         app.MapPost("/admin/login", async (HttpContext context) =>
+         {
+diff --git a/Server/HexLive.Server/Admin/AdminPages.cs b/Server/HexLive.Server/Admin/AdminPages.cs
+index 120ce9183..c85bce5c1 100644
+--- a/Server/HexLive.Server/Admin/AdminPages.cs
++++ b/Server/HexLive.Server/Admin/AdminPages.cs
+@@ -147,7 +147,7 @@ recovery address on file.</p>
+ 
+     public static string Dashboard(WorldHost host, AdminAccount account, bool insecureTransport,
+         string? notice, bool canSendMail, AssetCatalogOverview catalog,
+-        long pinnedCatalogRevision, int actionableBugs)
++        long pinnedCatalogRevision)
+     {
+         var census = host.Census();
+         var body = new StringBuilder();
+@@ -199,9 +199,8 @@ recovery address on file.</p>
+             .Append("</span></div></div>");
+ 
+         body.Append("<h2>Bug tracker</h2><div class='card'><div class='row'>")
+-            .Append("<a href='/admin/bugs'><button type='button' class='primary'>Open bug tracker</button></a>")
+-            .Append("<span class='dim'>").Append(actionableBugs)
+-            .Append(" actionable reports · central SQLite store</span></div></div>");
++            .Append("<a href='" + RetiredBugTracker.Url + "'><button type='button' class='primary'>Open Flashback</button></a>")
++            .Append("<span class='dim'>Shared bug tracker</span></div></div>");
+ 
+         body.Append("<h2>World clock</h2><div class='card'><div class='row'>");
+         body.Append(host.IsPaused
+diff --git a/Server/HexLive.Server/Bugs/BugAdminEndpoints.cs b/Server/HexLive.Server/Bugs/BugAdminEndpoints.cs
+deleted file mode 100644
+index dc63394c4..000000000
+--- a/Server/HexLive.Server/Bugs/BugAdminEndpoints.cs
++++ /dev/null
+@@ -1,116 +0,0 @@
+-using System;
+-using System.IO;
+-using System.Threading.Tasks;
+-using HexLive.Server.Admin;
+-using Microsoft.AspNetCore.Builder;
+-using Microsoft.AspNetCore.Http;
+-
+-namespace HexLive.Server.Bugs;
+-
+-public static class BugAdminEndpoints
+-{
+-    private const string Cookie = "hexlive_admin";
+-
+-    public static void Map(WebApplication app, BugDatabase bugs, AdminSessions sessions)
+-    {
+-        // §114.3B: the same URLs answer two ways. A browser navigation gets a
+-        // whole page; the panel script (X-Requested-With: fetch) gets only the
+-        // fragment it swaps in, so the list underneath keeps its scroll.
+-        app.MapGet("/admin/bugs", (HttpContext c) =>
+-        {
+-            if (!SignedIn(c,sessions)) return Results.Redirect("/admin");
+-            var status=c.Request.Query["status"].ToString(); var query=c.Request.Query["q"].ToString();
+-            return Html(Partial(c)
+-                ? BugAdminPages.ListFragment(bugs.List(),status,query,Page(c))
+-                : BugAdminPages.List(bugs.List(),status,query,c.Request.Query["notice"].ToString(),Page(c)));
+-        });
+-
+-        app.MapGet("/admin/bugs/{id:int}", (HttpContext c, int id) =>
+-        {
+-            if (!SignedIn(c,sessions)) return Results.Redirect("/admin");
+-            var report=bugs.Get(id);
+-            if (report==null) return Partial(c) ? Results.NotFound() : RedirectWithNotice("/admin/bugs",$"Отчёт #{id} не найден");
+-            var notice=c.Request.Query["notice"].ToString();
+-            return Html(Partial(c)
+-                ? BugAdminPages.Detail(report,Patches(bugs,report),notice)
+-                : BugAdminPages.List(bugs.List(),string.Empty,string.Empty,notice,1,report,Patches(bugs,report)));
+-        });
+-
+-        app.MapPost("/admin/bugs/create", async (HttpContext c) =>
+-        {
+-            if (!SignedIn(c,sessions)) return Results.Redirect("/admin");
+-            var f=await c.Request.ReadFormAsync();
+-            try
+-            {
+-                bugs.Create(new CreateBugRequest { Text=f["text"].ToString(), Context=f["context"].ToString(), ReportedInVersion=f["reportedInVersion"].ToString() });
+-                // PRG back to the list: the freshly created report is already
+-                // the first card, and refreshing cannot submit the form twice.
+-                return RedirectWithNotice("/admin/bugs", "Отправлено");
+-            }
+-            catch(InvalidDataException e) { return RedirectWithNotice("/admin/bugs", e.Message); }
+-        });
+-
+-        app.MapPost("/admin/bugs/{id:int}/edit", async (HttpContext c,int id) =>
+-        {
+-            if (!SignedIn(c,sessions)) return Results.Redirect("/admin");
+-            var f=await c.Request.ReadFormAsync();
+-            var status=f["status"].ToString();
+-            try
+-            {
+-                bugs.Update(id,new UpdateBugRequest { Text=f["text"].ToString(), Status=status, AssignedAgent=f["assignedAgent"].ToString(), AgentHandoff=f["agentHandoff"].ToString(), Archived=f.ContainsKey("archived") });
+-                return Answer(c,bugs,id,"Сохранено");
+-            }
+-            catch(InvalidDataException e) { return Answer(c,bugs,id,e.Message); }
+-        });
+-
+-        app.MapPost("/admin/bugs/{id:int}/comment", async (HttpContext c,int id) =>
+-        {
+-            if (!SignedIn(c,sessions)) return Results.Redirect("/admin");
+-            var f=await c.Request.ReadFormAsync();
+-            try { bugs.AddComment(id,new AddBugCommentRequest { Author="user",Text=f["text"].ToString() }); }
+-            catch(InvalidDataException) { }
+-            return Answer(c,bugs,id,string.Empty);
+-        });
+-
+-        app.MapPost("/admin/bugs/{id:int}/repeat", async (HttpContext c,int id) =>
+-        {
+-            if (!SignedIn(c,sessions)) return Results.Redirect("/admin");
+-            var f=await c.Request.ReadFormAsync();
+-            bugs.Update(id,new UpdateBugRequest { Status=BugStatuses.Rework, Archived=false, ReadyForTestInVersion=string.Empty, FixedInVersion=string.Empty });
+-            var text=f["text"].ToString().Trim();
+-            if(text.Length>0) bugs.AddComment(id,new AddBugCommentRequest { Author="user",Text=text });
+-            return Answer(c,bugs,id,"Возвращено на доработку");
+-        });
+-
+-        app.MapPost("/admin/bugs/{id:int}/delete", (HttpContext c,int id) =>
+-        {
+-            if (!SignedIn(c,sessions)) return Results.Redirect("/admin");
+-            bugs.Delete(id);
+-            return Partial(c) ? Html(BugAdminPages.Deleted("Удалено")) : RedirectWithNotice("/admin/bugs", "Удалено");
+-        });
+-    }
+-
+-    /// <summary>After a panel form: the re-rendered fragment; after a plain form: PRG as before.</summary>
+-    private static IResult Answer(HttpContext c,BugDatabase bugs,int id,string notice)
+-    {
+-        if (!Partial(c)) return notice.Length==0 ? Results.Redirect($"/admin/bugs/{id}") : RedirectWithNotice($"/admin/bugs/{id}",notice);
+-        var report=bugs.Get(id);
+-        return report==null ? Html(BugAdminPages.Deleted($"Отчёт #{id} уже удалён")) : Html(BugAdminPages.Detail(report,Patches(bugs,report),notice));
+-    }
+-
+-    private static System.Collections.Generic.IReadOnlyDictionary<string,BugCommitPatch> Patches(BugDatabase bugs,BugReport report) =>
+-        bugs.GetCommitPatches(report.FixCommits.Count>0 ? report.FixCommits : new[]{report.FixCommit});
+-
+-    internal static bool Partial(HttpContext c) =>
+-        string.Equals(c.Request.Headers["X-Requested-With"].ToString(),"fetch",StringComparison.OrdinalIgnoreCase) ||
+-        c.Request.Query["partial"].ToString()=="1";
+-
+-    internal static IResult RedirectWithNotice(string path,string notice) =>
+-        Results.Redirect(path+"?notice="+Uri.EscapeDataString(notice));
+-
+-    private static int Page(HttpContext context) =>
+-        int.TryParse(context.Request.Query["page"].ToString(),out var page) && page>0 ? page : 1;
+-
+-    private static bool SignedIn(HttpContext c,AdminSessions sessions) => sessions.IsSignedIn(c.Request.Cookies[Cookie]??string.Empty);
+-    private static IResult Html(string value) => Results.Content(value,"text/html; charset=utf-8");
+-}
+diff --git a/Server/HexLive.Server/Bugs/BugAdminPages.cs b/Server/HexLive.Server/Bugs/BugAdminPages.cs
+deleted file mode 100644
+index 8883e180d..000000000
+--- a/Server/HexLive.Server/Bugs/BugAdminPages.cs
++++ /dev/null
+@@ -1,237 +0,0 @@
+-using System;
+-using System.Collections.Generic;
+-using System.Linq;
+-using System.Net;
+-using System.Text;
+-
+-namespace HexLive.Server.Bugs;
+-
+-/// <summary>
+-/// §114.3A web admin. The list is the page; a report opens in a panel over it
+-/// (§114.3B), so «back» returns to the same scroll position and the cards
+-/// behind the panel are refreshed from the server rather than remembered.
+-/// </summary>
+-public static class BugAdminPages
+-{
+-    internal const int PageSize = 24;
+-    internal const string GitHubCommitBase = "https://github.com/simple-diple/HexLive/commit/";
+-    private static readonly IReadOnlyDictionary<string,BugCommitPatch> NoPatches = new Dictionary<string,BugCommitPatch>();
+-
+-    /// <summary>Full list page; with <paramref name="open"/> the panel is already showing that report (direct link).</summary>
+-    public static string List(IReadOnlyList<BugReport> reports,string status,string query,string notice,int page=1,
+-        BugReport? open=null,IReadOnlyDictionary<string,BugCommitPatch>? patches=null)
+-    {
+-        status=(status??string.Empty).Trim(); query=(query??string.Empty).Trim();
+-        var b=new StringBuilder();
+-        b.Append("<div class='sticky-head'>"); Nav(b,"Баг-трекер");
+-        b.Append("<section class='toolbar'><form method='get'><input name='q' value='").Append(E(query)).Append("' placeholder='Поиск'><select name='status'><option value=''>Все статусы</option>");
+-        foreach(var s in Statuses()) b.Append("<option value='").Append(s).Append("'").Append(s==status?" selected":"").Append(">").Append(Status(s)).Append("</option>");
+-        b.Append("</select><button>Фильтр</button></form><div class='toolbar-actions'><span class='count' id='count'></span><button class='primary' type='button' onclick=\"document.getElementById('new-bug').showModal()\">+ Новый отчёт</button></div></section></div>");
+-        Notice(b,notice);
+-        b.Append("<dialog id='new-bug'><div class='dialog-title'><h2>Новый отчёт</h2><form method='dialog'><button aria-label='Закрыть'>×</button></form></div><form method='post' action='/admin/bugs/create'><textarea name='text' required autofocus placeholder='Что сломалось?'></textarea><div class='grid'><input name='context' placeholder='seed=… tick=… npc=…'><input name='reportedInVersion' placeholder='Версия'></div><div class='dialog-actions'><button type='button' onclick=\"document.getElementById('new-bug').close()\">Отмена</button><button class='primary'>Отправить</button></div></form></dialog>");
+-        b.Append("<div id='list' data-list-url='").Append(E(ListUrl(status,query,page))).Append("'>");
+-        b.Append(ListFragment(reports,status,query,page));
+-        b.Append("</div>");
+-        b.Append("<dialog id='bug-panel' class='bug-panel' aria-label='Отчёт'><div id='bug-panel-body'>");
+-        if(open!=null) b.Append(Detail(open,patches??NoPatches,string.Empty));
+-        b.Append("</div></dialog>");
+-        b.Append("<script>").Append(Script).Append("</script>");
+-        return Page("Баг-трекер",b.ToString());
+-    }
+-
+-    /// <summary>Cards + pagination only — what the panel refreshes behind itself.</summary>
+-    public static string ListFragment(IReadOnlyList<BugReport> reports,string status,string query,int page=1)
+-    {
+-        status=(status??string.Empty).Trim(); query=(query??string.Empty).Trim();
+-        var filtered=reports.Where(r=>(status.Length==0||r.Status==status)&&
+-            (query.Length==0||r.Text.Contains(query,StringComparison.OrdinalIgnoreCase)||r.Context.Contains(query,StringComparison.OrdinalIgnoreCase)||r.Id.ToString().Contains(query))).Reverse().ToList();
+-        var pageCount=Math.Max(1,(filtered.Count+PageSize-1)/PageSize);
+-        page=Math.Clamp(page,1,pageCount);
+-        var visible=filtered.Skip((page-1)*PageSize).Take(PageSize);
+-        var b=new StringBuilder();
+-        b.Append("<main class='cards' data-count='").Append(filtered.Count).Append("'>");
+-        foreach(var r in visible) Card(b,r);
+-        b.Append("</main>"); Pagination(b,status,query,page,pageCount);
+-        return b.ToString();
+-    }
+-
+-    /// <summary>One report as rendered inside the panel (also the fetch response to every panel form).</summary>
+-    public static string Detail(BugReport r,IReadOnlyDictionary<string,BugCommitPatch> patches,string notice)
+-    {
+-        var b=new StringBuilder();
+-        b.Append("<div class='detail' data-bug='").Append(r.Id).Append("' data-notice='").Append(E(notice)).Append("'>");
+-        b.Append("<div class='detail-head'><h2>Баг #").Append(r.Id).Append("</h2><span class='chip ").Append(r.Status).Append("'>").Append(Status(r.Status)).Append("</span>").Append(r.Archived?"<span class='chip archived'>Архив</span>":"").Append("<a class='close' href='/admin/bugs' data-close aria-label='Закрыть'>×</a></div>");
+-        b.Append("<section class='panel'><form method='post' action='/admin/bugs/").Append(r.Id).Append("/edit'><label>Описание</label><textarea name='text' required>").Append(E(r.Text)).Append("</textarea><div class='grid'><div><label>Статус</label><select name='status'>");
+-        foreach(var s in Statuses()) b.Append("<option value='").Append(s).Append("'").Append(s==r.Status?" selected":"").Append(">").Append(Status(s)).Append("</option>");
+-        b.Append("</select></div><div><label>Агент</label><input name='assignedAgent' value='").Append(E(r.AssignedAgent)).Append("'></div></div><label>Handoff</label><textarea class='small' name='agentHandoff'>").Append(E(r.AgentHandoff)).Append("</textarea><label class='check'><input type='checkbox' name='archived'").Append(r.Archived?" checked":"").Append("> В архиве</label><button class='primary'>Сохранить</button></form><div class='meta'>").Append(E(r.Context)).Append(" · создан ").Append(E(r.CreatedUtc)).Append(" · rev ").Append(r.Revision);
+-        if(r.ReportedInVersion.Length>0) b.Append(" · заведён в ").Append(E(r.ReportedInVersion));
+-        if(r.ReadyForTestInVersion.Length>0) b.Append(" · к проверке в ").Append(E(r.ReadyForTestInVersion));
+-        if(r.FixedInVersion.Length>0) b.Append(" · исправлен в ").Append(E(r.FixedInVersion));
+-        b.Append("</div></section>");
+-        b.Append("<section class='panel'><h2>Комментарии</h2>");
+-        foreach(var c in r.Comments) b.Append("<article class='comment'><b>").Append(E(c.Author)).Append("</b><small>").Append(E(c.WhenUtc)).Append("</small><p>").Append(E(c.Text)).Append("</p></article>");
+-        b.Append("<form method='post' action='/admin/bugs/").Append(r.Id).Append("/comment'><textarea class='small' name='text' required placeholder='Комментарий'></textarea><button>Добавить</button></form></section>");
+-        b.Append("<section class='panel actions'><form method='post' action='/admin/bugs/").Append(r.Id).Append("/repeat'><input name='text' placeholder='Что повторилось?'><button class='repeat'>↻ Повтори</button></form><form method='post' action='/admin/bugs/").Append(r.Id).Append("/delete' onsubmit=\"return confirm('Удалить отчёт безвозвратно?')\"><button class='danger'>Удалить</button></form></section>");
+-        Commits(b,r,patches);
+-        b.Append("</div>");
+-        return b.ToString();
+-    }
+-
+-    /// <summary>The fetch response after a panel delete: nothing to show, a notice to toast.</summary>
+-    public static string Deleted(string notice) =>
+-        "<div class='detail' data-deleted='1' data-notice='"+E(notice)+"'></div>";
+-
+-    private static void Card(StringBuilder b,BugReport r)
+-    {
+-        b.Append("<a class='card' data-bug='").Append(r.Id).Append("' href='/admin/bugs/").Append(r.Id).Append("'><div class='line'><b>#").Append(r.Id).Append("</b><span class='chip ").Append(r.Status).Append("'>").Append(Status(r.Status)).Append("</span>").Append(r.Archived?"<span class='chip archived'>Архив</span>":"");
+-        if(r.FixCommits.Count>0) b.Append("<span class='chip commits' title='Коммиты'>⎇ ").Append(r.FixCommits.Count).Append("</span>");
+-        if(r.Comments.Count>0) b.Append("<span class='chip comments' title='Комментарии'>💬 ").Append(r.Comments.Count).Append("</span>");
+-        b.Append("</div><p>").Append(E(r.Text)).Append("</p><small>").Append(E(r.Context)).Append("</small></a>");
+-    }
+-
+-    // ── §114.4c commits with their patches ─────────────────────────────────
+-
+-    private static void Commits(StringBuilder b,BugReport r,IReadOnlyDictionary<string,BugCommitPatch> patches)
+-    {
+-        var shas=r.FixCommits.Count>0?r.FixCommits:(r.FixCommit.Length>0?new List<string>{r.FixCommit}:new List<string>());
+-        if(shas.Count==0) return;
+-        b.Append("<section class='panel commits'><h2>Коммиты</h2>");
+-        foreach(var sha in shas)
+-        {
+-            patches.TryGetValue(sha,out var patch);
+-            if(patch==null)
+-            {
+-                b.Append("<div class='commit missing'><code>").Append(E(Short(sha))).Append("</code><small>дифф ещё не загружен в трекер · <a href='").Append(E(GitHubCommitBase+sha)).Append("' target='_blank' rel='noopener'>GitHub</a></small></div>");
+-                continue;
+-            }
+-            var added=patch.Files.Sum(f=>f.Added); var deleted=patch.Files.Sum(f=>f.Deleted);
+-            b.Append("<details class='commit'><summary><code>").Append(E(Short(patch.Sha))).Append("</code><b>").Append(E(patch.Subject)).Append("</b><small>")
+-             .Append(E(patch.Author)).Append(patch.WhenUtc.Length>0?" · "+E(When(patch.WhenUtc)):"")
+-             .Append(" · ").Append(Files(patch.Files.Count)).Append(" <span class='add'>+").Append(added).Append("</span> <span class='del'>−").Append(deleted).Append("</span></small></summary>");
+-            b.Append("<div class='commit-body'>");
+-            var message=patch.Message.Trim();
+-            if(message.Length>patch.Subject.Trim().Length) b.Append("<pre class='message'>").Append(E(message)).Append("</pre>");
+-            b.Append("<ul class='files'>");
+-            var n=0;
+-            foreach(var f in patch.Files)
+-            {
+-                b.Append("<li><a href='#c").Append(E(Short(patch.Sha))).Append("-f").Append(n++).Append("'>").Append(E(f.Path)).Append("</a>");
+-                b.Append(f.Binary?"<small>бинарный</small>":"<small><span class='add'>+"+f.Added+"</span> <span class='del'>−"+f.Deleted+"</span></small>").Append("</li>");
+-            }
+-            b.Append("</ul>");
+-            b.Append("<div class='diff-actions'><a href='").Append(E(GitHubCommitBase+patch.Sha)).Append("' target='_blank' rel='noopener'>Открыть на GitHub</a></div>");
+-            Diff(b,patch);
+-            if(patch.Truncated) b.Append("<div class='truncated'>Дифф обрезан: коммит больше лимита трекера.</div>");
+-            b.Append("</div></details>");
+-        }
+-        b.Append("</section>");
+-    }
+-
+-    /// <summary>Colours a unified diff line by line; header lines are only recognised outside hunks.</summary>
+-    internal static void Diff(StringBuilder b,BugCommitPatch patch)
+-    {
+-        if(patch.Patch.Length==0) return;
+-        b.Append("<pre class='diff'>");
+-        var file=-1; var inHunk=false;
+-        foreach(var raw in patch.Patch.Split('\n'))
+-        {
+-            var line=raw.TrimEnd('\r');
+-            if(line.StartsWith("diff --git ",StringComparison.Ordinal))
+-            {
+-                file++; inHunk=false;
+-                b.Append("<span class='file' id='c").Append(E(Short(patch.Sha))).Append("-f").Append(file).Append("'>").Append(E(FileHeader(line))).Append("</span>");
+-                continue;
+-            }
+-            string cls;
+-            if(line.StartsWith("@@",StringComparison.Ordinal)) { inHunk=true; cls="hunk"; }
+-            else if(!inHunk) cls="meta";
+-            else if(line.StartsWith("+",StringComparison.Ordinal)) cls="add";
+-            else if(line.StartsWith("-",StringComparison.Ordinal)) cls="del";
+-            else if(line.StartsWith("\\",StringComparison.Ordinal)) cls="meta";
+-            else cls="ctx";
+-            b.Append("<span class='").Append(cls).Append("'>").Append(E(line)).Append("</span>");
+-        }
+-        b.Append("</pre>");
+-    }
+-
+-    private static string FileHeader(string line)
+-    {
+-        // "diff --git a/path b/path" → "path" (the b-side; renames show both).
+-        var marker=line.IndexOf(" b/",StringComparison.Ordinal);
+-        if(marker<0) return line;
+-        var right=line.Substring(marker+3);
+-        var left=line.Substring("diff --git a/".Length,marker-"diff --git a/".Length);
+-        return left==right?right:left+" → "+right;
+-    }
+-
+-    private static string Files(int n) => n+(n%10==1&&n%100!=11?" файл":n%10>=2&&n%10<=4&&(n%100<10||n%100>=20)?" файла":" файлов");
+-    private static string Short(string sha)=>sha.Length>10?sha.Substring(0,10):sha;
+-    /// <summary>ISO «2026-09-03T10:58:58+07:00» → «2026-09-03 10:58»; anything else is shown as is.</summary>
+-    private static string When(string iso)=>iso.Length>=16&&iso[10]=='T'?iso.Substring(0,10)+" "+iso.Substring(11,5):iso;
+-
+-    // ── chrome ──────────────────────────────────────────────────────────────
+-
+-    private static string ListUrl(string status,string query,int page)
+-    {
+-        if(status.Length==0&&query.Length==0&&page<=1) return "/admin/bugs";
+-        return "/admin/bugs?status="+Uri.EscapeDataString(status)+"&q="+Uri.EscapeDataString(query)+"&page="+page;
+-    }
+-    private static void Nav(StringBuilder b,string title) => b.Append("<header><a href='/admin'>HexLive</a><span>›</span><a href='/admin/bugs'>Баги</a><h1>").Append(E(title)).Append("</h1></header>");
+-    private static void Notice(StringBuilder b,string value) { if(!string.IsNullOrWhiteSpace(value)) b.Append("<div class='notice' role='status' aria-live='polite'>").Append(E(value)).Append("</div>"); }
+-    private static void Pagination(StringBuilder b,string status,string query,int page,int pageCount)
+-    {
+-        if(pageCount<=1) return;
+-        b.Append("<nav class='pagination' aria-label='Страницы'>");
+-        if(page>1) PageLink(b,status,query,page-1,"‹",false);
+-        var first=Math.Max(1,page-2); var last=Math.Min(pageCount,page+2);
+-        if(first>1) { PageLink(b,status,query,1,"1",false); if(first>2) b.Append("<span>…</span>"); }
+-        for(var number=first;number<=last;number++) PageLink(b,status,query,number,number.ToString(),number==page);
+-        if(last<pageCount) { if(last<pageCount-1) b.Append("<span>…</span>"); PageLink(b,status,query,pageCount,pageCount.ToString(),false); }
+-        if(page<pageCount) PageLink(b,status,query,page+1,"›",false);
+-        b.Append("</nav>");
+-    }
+-    private static void PageLink(StringBuilder b,string status,string query,int page,string label,bool current)
+-    {
+-        var href="/admin/bugs?status="+Uri.EscapeDataString(status)+"&q="+Uri.EscapeDataString(query)+"&page="+page;
+-        b.Append("<a href='").Append(E(href)).Append("'").Append(current?" class='current' aria-current='page'":"").Append(">").Append(label).Append("</a>");
+-    }
+-    private static string[] Statuses()=>new[]{BugStatuses.Created,BugStatuses.InProgress,BugStatuses.ReadyForTest,BugStatuses.Rework,BugStatuses.Fixed};
+-    private static string Status(string s)=>s switch { BugStatuses.Created=>"🆕 Создан",BugStatuses.InProgress=>"🛠 В работе",BugStatuses.ReadyForTest=>"🧪 К проверке",BugStatuses.Rework=>"🔁 Повтори",BugStatuses.Fixed=>"✅ Исправлен",_=>s };
+-    private static string E(string? s)=>WebUtility.HtmlEncode(s??string.Empty);
+-    private static string Page(string title,string body)=>"<!doctype html><html lang='ru'><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>"+E(title)+" · HexLive</title><style>"+Style+"</style></head><body><div class='wrap'>"+body+"</div><script>const n=document.querySelector('.notice');if(n)setTimeout(()=>n.classList.add('closing'),2600)</script></body></html>";
+-
+-    // The panel: a modal <dialog> over the list. The list document never
+-    // navigates while a report is open, so its scroll position survives for
+-    // free; the browser history still gets one entry per opened report so
+-    // «back» (and a shared link) behaves like a page. Every form inside the
+-    // panel posts with fetch and receives the re-rendered detail fragment;
+-    // the cards behind are then re-fetched — statuses are read, not guessed.
+-    private const string Script=@"
+-(()=>{
+-const F='fetch',H={'X-Requested-With':F};
+-const panel=document.getElementById('bug-panel'),body=document.getElementById('bug-panel-body'),list=document.getElementById('list');
+-const listUrl=list.dataset.listUrl;
+-function toast(text){if(!text)return;const n=document.createElement('div');n.className='notice';n.setAttribute('role','status');n.textContent=text;document.body.appendChild(n);setTimeout(()=>n.classList.add('closing'),2600);setTimeout(()=>n.remove(),3200)}
+-function count(){const m=list.querySelector('main.cards');const c=document.getElementById('count');if(m&&c)c.textContent=m.dataset.count+' отч.'}
+-async function refreshList(){try{const r=await fetch(listUrl,{headers:H});if(!r.ok)return;const y=window.scrollY;list.innerHTML=await r.text();count();window.scrollTo(0,y)}catch(e){}}
+-function show(html){body.innerHTML=html;const d=body.firstElementChild;if(!panel.open)panel.showModal();panel.scrollTop=0;return d}
+-async function openBug(id,push){try{const r=await fetch('/admin/bugs/'+id,{headers:H});if(!r.ok){toast('Отчёт #'+id+' не найден');return}show(await r.text());if(push)history.pushState({bug:id},'','/admin/bugs/'+id)}catch(e){location.href='/admin/bugs/'+id}}
+-function closePanel(){if(panel.open)panel.close();if(history.state&&history.state.bug)history.back();else{history.replaceState({},'',listUrl);refreshList()}}
+-list.addEventListener('click',e=>{const a=e.target.closest('a.card');if(!a||e.metaKey||e.ctrlKey||e.shiftKey||e.button)return;e.preventDefault();openBug(a.dataset.bug,true)});
+-panel.addEventListener('click',e=>{if(e.target.closest('[data-close]')){e.preventDefault();closePanel();return}if(e.target===panel)closePanel()});
+-panel.addEventListener('cancel',e=>{e.preventDefault();closePanel()});
+-document.addEventListener('keydown',e=>{if(e.key==='Escape'&&panel.open&&!e.defaultPrevented){e.preventDefault();closePanel()}});
+-panel.addEventListener('submit',async e=>{const form=e.target;if(e.defaultPrevented||!form.action)return;e.preventDefault();const btn=form.querySelector('button');if(btn)btn.disabled=true;try{const r=await fetch(form.action,{method:'POST',headers:H,body:new URLSearchParams(new FormData(form))});if(!r.ok){toast('Ошибка '+r.status);return}const d=show(await r.text());toast(d.dataset.notice);if(d.dataset.deleted){history.replaceState({},'',listUrl);if(panel.open)panel.close()}refreshList()}catch(err){toast('Нет связи с сервером')}finally{if(btn)btn.disabled=false}});
+-window.addEventListener('popstate',e=>{if(e.state&&e.state.bug)openBug(e.state.bug,false);else{if(panel.open)panel.close();refreshList()}});
+-count();
+-const open=body.firstElementChild;if(open){const here=location.pathname;history.replaceState({},'',listUrl);history.pushState({bug:open.dataset.bug},'',here);panel.showModal()}
+-})();";
+-
+-    private const string Style=@"
+-:root{color-scheme:dark;--bg:#10161a;--panel:#141d22;--raised:#222a31;--stroke:#39454d;--text:#dce3e6;--dim:#8c999f;--accent:#4d8c61;--add:#7fd08d;--del:#ef8a80}*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 20% 0,#26362b 0,transparent 35%),var(--bg);color:var(--text);font:15px system-ui,sans-serif}.wrap{max-width:1120px;margin:auto;padding:28px}.sticky-head{position:sticky;z-index:10;top:0;padding-top:12px;background:linear-gradient(var(--bg) 78%,transparent)}header{display:flex;align-items:center;gap:10px;margin-bottom:12px}header a{color:#9eb2ba;text-decoration:none}h1{margin:0 0 0 auto;font-size:22px}h2{font-size:16px;margin:0 0 14px}.panel,.toolbar,.card{background:rgba(20,29,34,.97);border:1px solid var(--stroke);border-radius:13px}.panel{padding:18px;margin-bottom:14px}.toolbar{padding:12px;margin-bottom:14px;display:flex;justify-content:space-between;align-items:center;box-shadow:0 10px 24px #0005}.toolbar form,.grid,.actions,.actions form,.toolbar-actions,.dialog-actions{display:flex;gap:10px}.toolbar form{flex:1}.toolbar-actions{align-items:center}.grid>*{flex:1}.cards{display:grid;gap:10px}.card{padding:15px;color:inherit;text-decoration:none}.card:hover{border-color:#668275;background:#17231d}.line{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.card p{white-space:pre-wrap;margin:10px 0}.card small,.meta,small{color:var(--dim)}input,textarea,select,button{font:inherit;color:var(--text);background:#0c1215;border:1px solid var(--stroke);border-radius:8px;padding:10px}textarea{width:100%;min-height:105px;resize:vertical;margin-bottom:10px}.small{min-height:65px}input{width:100%}label{display:block;color:#aeb9bd;font-size:12px;margin:9px 0 5px}.check{font-size:14px}.check input{width:auto}button{cursor:pointer;background:var(--raised)}button:disabled{opacity:.6;cursor:wait}button.primary{background:var(--accent);border-color:#69a67c}.danger{background:#6e302d}.repeat{background:#745d25}.chip{font-size:12px;padding:4px 8px;border-radius:999px;background:#71591f}.chip.in_progress{background:#854c1f}.chip.ready_for_test{background:#425d9a}.chip.rework{background:#8b4038}.chip.fixed{background:#3e784d}.chip.archived{background:#4d555a}.chip.commits,.chip.comments{background:#2b3a42;color:#b9c7cd}.comment{border-left:3px solid #3c4b53;padding:4px 12px;margin:12px 0}.comment small{margin-left:8px}.comment p{white-space:pre-wrap}.notice{position:fixed;z-index:30;top:20px;right:20px;max-width:min(420px,calc(100vw - 40px));background:#284733;border:1px solid #69a67c;box-shadow:0 12px 34px #0009;padding:12px 18px;border-radius:9px;transition:opacity .22s ease,transform .22s ease}.notice.closing{opacity:0;transform:translateY(-8px);pointer-events:none}dialog{width:min(680px,calc(100vw - 32px));color:var(--text);background:var(--panel);border:1px solid var(--stroke);border-radius:14px;box-shadow:0 24px 80px #000c;padding:18px}dialog::backdrop{background:#071014b8;backdrop-filter:blur(3px)}.dialog-title,.dialog-actions{display:flex;align-items:center;justify-content:space-between}.dialog-title form{margin-left:auto}.dialog-title button{font-size:22px;padding:3px 10px}.dialog-actions{justify-content:flex-end}.pagination{display:flex;align-items:center;justify-content:center;gap:7px;margin:18px 0}.pagination a,.pagination span{min-width:36px;text-align:center;padding:8px;border-radius:8px;color:var(--text);text-decoration:none}.pagination a{background:var(--panel);border:1px solid var(--stroke)}.pagination a.current{background:var(--accent);border-color:#69a67c}code{white-space:pre-wrap;color:#a9c5b2}
+-dialog.bug-panel{position:fixed;inset:0 0 0 auto;width:min(900px,100vw);height:100dvh;max-height:100dvh;max-width:100vw;margin:0;border-radius:0;border-width:0 0 0 1px;padding:18px 22px 40px;overflow:auto;background:var(--bg)}dialog.bug-panel::backdrop{background:#07101499}.detail-head{display:flex;align-items:center;gap:10px;margin:0 0 14px;position:sticky;top:-18px;padding:12px 0;background:var(--bg);z-index:2}.detail-head h2{margin:0;font-size:20px}.detail-head .close{margin-left:auto;font-size:26px;line-height:1;padding:2px 12px;color:var(--text);text-decoration:none;border:1px solid var(--stroke);border-radius:8px;background:var(--raised)}.detail-head .close:hover{border-color:#668275}
+-.commits .commit{border:1px solid var(--stroke);border-radius:10px;margin:8px 0;background:#0e1518}.commits .commit.missing{padding:10px 14px;display:flex;gap:12px;align-items:center}.commits summary{cursor:pointer;padding:10px 14px;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;list-style:none}.commits summary::-webkit-details-marker{display:none}.commits summary::before{content:'▸';color:var(--dim);margin-right:2px}.commits details[open]>summary::before{content:'▾'}.commits summary code{color:#a9c5b2}.commits summary small{margin-left:auto;white-space:nowrap}.commit-body{border-top:1px solid var(--stroke);padding:12px 14px}.commit-body .message{white-space:pre-wrap;margin:0 0 12px;color:#b9c7cd;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}.files{list-style:none;margin:0 0 12px;padding:0;display:grid;gap:4px}.files li{display:flex;gap:10px;align-items:baseline}.files a{color:#c8d7dc;text-decoration:none;font:13px ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all}.files a:hover{text-decoration:underline}.files small{margin-left:auto;white-space:nowrap}.diff-actions{margin:0 0 10px;font-size:13px}.diff-actions a{color:#9eb2ba}.add{color:var(--add)}.del{color:var(--del)}
+-pre.diff{margin:0;padding:0;overflow-x:auto;font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;background:#0a0f12;border:1px solid var(--stroke);border-radius:8px;tab-size:4}pre.diff span{display:block;padding:0 10px;white-space:pre;min-width:100%;width:max-content}pre.diff .file{position:sticky;top:0;background:#1a252b;color:#dce3e6;font-weight:600;padding:6px 10px;border-top:1px solid var(--stroke);scroll-margin-top:56px}pre.diff .file:first-child{border-top:0}pre.diff .meta{color:#6f7d84}pre.diff .hunk{color:#8fb4cf;background:#12212b}pre.diff .add{background:#12301c;color:#c8f0cf}pre.diff .del{background:#3a1b1a;color:#f5c9c4}pre.diff .ctx{color:#b6c0c4}.truncated{margin-top:8px;color:#e0b96a;font-size:13px}
+-@media(max-width:700px){.wrap{padding:0 12px 12px}.sticky-head{padding-top:8px}.grid,.toolbar,.toolbar form,.toolbar-actions,.actions{flex-direction:column;align-items:stretch}h1{display:none}.toolbar-actions .count{text-align:right}dialog.bug-panel{padding:12px 12px 40px}.commits summary small{margin-left:0;white-space:normal}}
+-";
+-}
+diff --git a/Server/HexLive.Server/Bugs/BugApiEndpoints.cs b/Server/HexLive.Server/Bugs/BugApiEndpoints.cs
+deleted file mode 100644
+index 61def04e3..000000000
+--- a/Server/HexLive.Server/Bugs/BugApiEndpoints.cs
++++ /dev/null
+@@ -1,172 +0,0 @@
+-using System;
+-using System.IO;
+-using System.Linq;
+-using System.Text.Json;
+-using System.Threading.Tasks;
+-using HexLive.Server.Admin;
+-using Microsoft.AspNetCore.Builder;
+-using Microsoft.AspNetCore.Http;
+-
+-namespace HexLive.Server.Bugs;
+-
+-public static class BugApiEndpoints
+-{
+-    private const string AdminCookie = "hexlive_admin";
+-
+-    public static void Map(WebApplication app, BugDatabase bugs, AccessTokenFile agentToken,
+-        AccessTokenFile? playerToken, AdminSessions sessions)
+-    {
+-        app.MapGet("/api/bugs/v1/reports", (HttpContext c) =>
+-        {
+-            var status = c.Request.Query["status"].ToString();
+-            var includeArchived = !string.Equals(c.Request.Query["archived"], "false", StringComparison.OrdinalIgnoreCase);
+-            return Results.Json(bugs.List(status, includeArchived));
+-        });
+-
+-        app.MapGet("/api/bugs/v1/reports/{id:int}", (HttpContext c, int id) =>
+-        {
+-            var report = bugs.Get(id);
+-            return report == null ? Results.NotFound() : Results.Json(report);
+-        });
+-
+-        // Filing is intentionally public: the game may report a connection bug
+-        // before it has authenticated for character control. Everything that
+-        // can alter somebody else's report remains authenticated.
+-        app.MapPost("/api/bugs/v1/reports", async (HttpContext c) =>
+-        {
+-            var request = await Read<CreateBugRequest>(c);
+-            return request == null
+-                ? Results.BadRequest(new { error = "invalid JSON" })
+-                : Try(() => Results.Json(bugs.Create(request), statusCode: StatusCodes.Status201Created));
+-        });
+-
+-        app.MapPost("/api/bugs/v1/reports/{id:int}", async (HttpContext c, int id) =>
+-        {
+-            var role = Role(c, agentToken, playerToken, sessions);
+-            if (role == BugApiRole.None) return Results.Unauthorized();
+-            var request = await Read<UpdateBugRequest>(c);
+-            if (request == null) return Results.BadRequest(new { error = "invalid JSON" });
+-            if (role == BugApiRole.Player && !PlayerUpdateAllowed(bugs.Get(id), request))
+-                return Results.StatusCode(StatusCodes.Status403Forbidden);
+-            return Try(() =>
+-            {
+-                var report = bugs.Update(id, request);
+-                return report == null ? Results.NotFound() : Results.Json(report);
+-            });
+-        });
+-
+-        app.MapPost("/api/bugs/v1/reports/{id:int}/comments", async (HttpContext c, int id) =>
+-        {
+-            var role = Role(c, agentToken, playerToken, sessions);
+-            if (role == BugApiRole.None) return Results.Unauthorized();
+-            var request = await Read<AddBugCommentRequest>(c);
+-            if (request == null) return Results.BadRequest(new { error = "invalid JSON" });
+-            if (role == BugApiRole.Player) request.Author = "user";
+-            return Try(() =>
+-            {
+-                var report = bugs.AddComment(id, request);
+-                return report == null ? Results.NotFound() : Results.Json(report);
+-            });
+-        });
+-
+-        app.MapPost("/api/bugs/v1/reports/{id:int}/comments/{ordinal:int}", async (HttpContext c, int id, int ordinal) =>
+-        {
+-            var role = Role(c, agentToken, playerToken, sessions);
+-            if (role == BugApiRole.None) return Results.Unauthorized();
+-            var request = await Read<AddBugCommentRequest>(c);
+-            if (request == null) return Results.BadRequest(new { error = "invalid JSON" });
+-            return Try(() =>
+-            {
+-                var report=bugs.EditComment(id,ordinal,request,role==BugApiRole.Player);
+-                return report==null?Results.NotFound():Results.Json(report);
+-            });
+-        });
+-
+-        // §114.4c: fix-commit patches. The server owns no repository, so the
+-        // agent uploads `git show` of every fix commit from its checkout; the
+-        // card then shows files and the diff without leaving the tracker.
+-        app.MapGet("/api/bugs/v1/commits", () => Results.Json(bugs.ListCommitPatchShas()));
+-
+-        app.MapGet("/api/bugs/v1/commits/{sha}", (string sha) =>
+-        {
+-            var patch = Try(() => bugs.GetCommitPatch(sha));
+-            return patch == null ? Results.NotFound() : Results.Json(patch);
+-        });
+-
+-        app.MapPut("/api/bugs/v1/commits/{sha}", async (HttpContext c, string sha) =>
+-        {
+-            if (Role(c, agentToken, playerToken, sessions) != BugApiRole.Agent) return Results.Unauthorized();
+-            var request = await Read<BugCommitPatch>(c);
+-            if (request == null) return Results.BadRequest(new { error = "invalid JSON" });
+-            if (!string.IsNullOrWhiteSpace(request.Sha) &&
+-                !string.Equals(request.Sha.Trim(), sha.Trim(), StringComparison.OrdinalIgnoreCase))
+-                return Results.BadRequest(new { error = "sha in the body differs from the route" });
+-            request.Sha = sha;
+-            return Try(() => Results.Json(bugs.PutCommitPatch(request)));
+-        });
+-
+-        app.MapPost("/api/bugs/v1/reports/{id:int}/delete", (HttpContext c, int id) =>
+-        {
+-            if (!CanAdminister(c, agentToken, sessions)) return Results.Unauthorized();
+-            return bugs.Delete(id) ? Results.NoContent() : Results.NotFound();
+-        });
+-
+-        app.MapDelete("/api/bugs/v1/reports/{id:int}", (HttpContext c, int id) =>
+-        {
+-            if (!CanAdminister(c, agentToken, sessions)) return Results.Unauthorized();
+-            return bugs.Delete(id) ? Results.NoContent() : Results.NotFound();
+-        });
+-    }
+-
+-    private static bool PlayerUpdateAllowed(BugReport? current, UpdateBugRequest request)
+-    {
+-        if (current == null) return true;
+-        if (request.AssignedAgent != null || request.AgentHandoff != null || request.FixCommits != null ||
+-            request.ReadyForTestInVersion != null || request.FixedInVersion != null)
+-            return false;
+-        if (request.Status == null) return true;
+-        return current.Status == BugStatuses.ReadyForTest &&
+-               request.Status is BugStatuses.Fixed or BugStatuses.Rework;
+-    }
+-
+-    private static bool CanAdminister(HttpContext c, AccessTokenFile agent, AdminSessions sessions) =>
+-        sessions.IsSignedIn(c.Request.Cookies[AdminCookie] ?? string.Empty) || agent.Matches(Bearer(c));
+-
+-    private static BugApiRole Role(HttpContext c, AccessTokenFile agent, AccessTokenFile? player,
+-        AdminSessions sessions)
+-    {
+-        if (sessions.IsSignedIn(c.Request.Cookies[AdminCookie] ?? string.Empty) || agent.Matches(Bearer(c)))
+-            return BugApiRole.Agent;
+-        return player != null && player.Matches(Bearer(c)) ? BugApiRole.Player : BugApiRole.None;
+-    }
+-
+-    private static string Bearer(HttpContext c)
+-    {
+-        var value = c.Request.Headers.Authorization.ToString();
+-        const string prefix = "Bearer ";
+-        return value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+-            ? value.Substring(prefix.Length).Trim() : string.Empty;
+-    }
+-
+-    private static async Task<T?> Read<T>(HttpContext context) where T : class
+-    {
+-        try { return await context.Request.ReadFromJsonAsync<T>(); }
+-        catch (JsonException) { return null; }
+-    }
+-
+-    private static IResult Try(Func<IResult> action)
+-    {
+-        try { return action(); }
+-        catch (BugRevisionConflictException e) { return Results.Conflict(new { error=e.Message, actualRevision=e.ActualRevision }); }
+-        catch (InvalidDataException e) { return Results.BadRequest(new { error=e.Message }); }
+-    }
+-
+-    /// <summary>A malformed SHA in a read is «not found», not a 500.</summary>
+-    private static BugCommitPatch? Try(Func<BugCommitPatch?> action)
+-    {
+-        try { return action(); }
+-        catch (InvalidDataException) { return null; }
+-    }
+-
+-    private enum BugApiRole { None, Player, Agent }
+-}
+diff --git a/Server/HexLive.Server/Bugs/BugDatabase.cs b/Server/HexLive.Server/Bugs/BugDatabase.cs
+deleted file mode 100644
+index d89e41e9f..000000000
+--- a/Server/HexLive.Server/Bugs/BugDatabase.cs
++++ /dev/null
+@@ -1,506 +0,0 @@
+-using System;
+-using System.Collections.Generic;
+-using System.Globalization;
+-using System.IO;
+-using System.Linq;
+-using System.Text.Json;
+-using Microsoft.Data.Sqlite;
+-
+-namespace HexLive.Server.Bugs;
+-
+-/// <summary>§114 central, transactional bug store. One process owns the file.</summary>
+-public sealed class BugDatabase
+-{
+-    private static readonly object ProviderGate = new();
+-    private static bool _providerReady;
+-    private readonly string _connectionString;
+-    private readonly object _gate = new();
+-
+-    public BugDatabase(string path)
+-    {
+-        lock (ProviderGate)
+-        {
+-            if (!_providerReady)
+-            {
+-                SQLitePCL.Batteries_V2.Init();
+-                _providerReady = true;
+-            }
+-        }
+-        var fullPath = Path.GetFullPath(path);
+-        Directory.CreateDirectory(Path.GetDirectoryName(fullPath) ?? ".");
+-        _connectionString = new SqliteConnectionStringBuilder
+-        {
+-            DataSource = fullPath,
+-            Mode = SqliteOpenMode.ReadWriteCreate,
+-            Cache = SqliteCacheMode.Shared,
+-        }.ToString();
+-        Initialize();
+-    }
+-
+-    public int CountActionable()
+-    {
+-        lock (_gate)
+-        {
+-            using var connection = Open();
+-            using var command = connection.CreateCommand();
+-            command.CommandText = "SELECT COUNT(*) FROM bug_reports WHERE archived=0 AND status IN ('created','rework','in_progress','ready_for_test')";
+-            return Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+-        }
+-    }
+-
+-    public IReadOnlyList<BugReport> List(string? status = null, bool includeArchived = true)
+-    {
+-        lock (_gate)
+-        {
+-            using var connection = Open();
+-            using var command = connection.CreateCommand();
+-            var where = new List<string>();
+-            if (!string.IsNullOrWhiteSpace(status))
+-            {
+-                where.Add("status=$status");
+-                command.Parameters.AddWithValue("$status", status);
+-            }
+-            if (!includeArchived) where.Add("archived=0");
+-            command.CommandText = SelectReports +
+-                (where.Count == 0 ? string.Empty : " WHERE " + string.Join(" AND ", where)) +
+-                " ORDER BY id";
+-            using var reader = command.ExecuteReader();
+-            var reports = new List<BugReport>();
+-            while (reader.Read()) reports.Add(ReadReport(reader));
+-            LoadChildren(connection, reports);
+-            return reports;
+-        }
+-    }
+-
+-    public BugReport? Get(int id)
+-    {
+-        lock (_gate)
+-        {
+-            using var connection = Open();
+-            var report = Get(connection, id);
+-            if (report != null) LoadChildren(connection, new[] { report });
+-            return report;
+-        }
+-    }
+-
+-    public BugReport Create(CreateBugRequest request)
+-    {
+-        var text = RequireText(request.Text, "text");
+-        lock (_gate)
+-        {
+-            using var connection = Open();
+-            using var command = connection.CreateCommand();
+-            command.CommandText = @"
+-INSERT INTO bug_reports(created_utc,status,text,context,reported_version)
+-VALUES($created,'created',$text,$context,$version);
+-SELECT last_insert_rowid();";
+-            command.Parameters.AddWithValue("$created", Now());
+-            command.Parameters.AddWithValue("$text", text);
+-            command.Parameters.AddWithValue("$context", request.Context?.Trim() ?? string.Empty);
+-            command.Parameters.AddWithValue("$version", request.ReportedInVersion?.Trim() ?? string.Empty);
+-            var id = Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+-            return Get(connection, id)!;
+-        }
+-    }
+-
+-    public BugReport? Update(int id, UpdateBugRequest request)
+-    {
+-        if (request.Status != null && !BugStatuses.IsValid(request.Status))
+-            throw new InvalidDataException("Unknown bug status.");
+-        lock (_gate)
+-        {
+-            using var connection = Open();
+-            using var transaction = connection.BeginTransaction();
+-            var current = Get(connection, id, transaction);
+-            if (current == null) return null;
+-            if (request.ExpectedRevision.HasValue && request.ExpectedRevision.Value != current.Revision)
+-                throw new BugRevisionConflictException(current.Revision);
+-
+-            using var command = connection.CreateCommand();
+-            command.Transaction = transaction;
+-            command.CommandText = @"
+-UPDATE bug_reports SET
+- text=$text,status=$status,assigned_agent=$agent,agent_handoff=$handoff,
+- ready_version=$ready,fixed_version=$fixed,archived=$archived,revision=revision+1
+-WHERE id=$id";
+-            command.Parameters.AddWithValue("$text", request.Text == null ? current.Text : RequireText(request.Text, "text"));
+-            command.Parameters.AddWithValue("$status", request.Status ?? current.Status);
+-            command.Parameters.AddWithValue("$agent", request.AssignedAgent ?? current.AssignedAgent);
+-            command.Parameters.AddWithValue("$handoff", request.AgentHandoff ?? current.AgentHandoff);
+-            command.Parameters.AddWithValue("$ready", request.ReadyForTestInVersion ?? current.ReadyForTestInVersion);
+-            command.Parameters.AddWithValue("$fixed", request.FixedInVersion ?? current.FixedInVersion);
+-            command.Parameters.AddWithValue("$archived", (request.Archived ?? current.Archived) ? 1 : 0);
+-            command.Parameters.AddWithValue("$id", id);
+-            command.ExecuteNonQuery();
+-
+-            if (request.FixCommits != null)
+-            {
+-                using var clear = connection.CreateCommand();
+-                clear.Transaction = transaction;
+-                clear.CommandText = "DELETE FROM bug_fix_commits WHERE report_id=$id";
+-                clear.Parameters.AddWithValue("$id", id);
+-                clear.ExecuteNonQuery();
+-                InsertCommits(connection, transaction, id, request.FixCommits);
+-            }
+-            transaction.Commit();
+-            var result = Get(connection, id)!;
+-            LoadChildren(connection, new[] { result });
+-            return result;
+-        }
+-    }
+-
+-    public BugReport? AddComment(int id, AddBugCommentRequest request)
+-    {
+-        var text = RequireText(request.Text, "comment text");
+-        var author = string.IsNullOrWhiteSpace(request.Author) ? "user" : request.Author.Trim();
+-        lock (_gate)
+-        {
+-            using var connection = Open();
+-            using var transaction = connection.BeginTransaction();
+-            if (Get(connection, id, transaction) == null) return null;
+-            using var command = connection.CreateCommand();
+-            command.Transaction = transaction;
+-            command.CommandText = @"
+-INSERT INTO bug_comments(report_id,ordinal,when_utc,author,text)
+-VALUES($id,COALESCE((SELECT MAX(ordinal)+1 FROM bug_comments WHERE report_id=$id),0),$when,$author,$text);
+-UPDATE bug_reports SET revision=revision+1 WHERE id=$id;";
+-            command.Parameters.AddWithValue("$id", id);
+-            command.Parameters.AddWithValue("$when", Now());
+-            command.Parameters.AddWithValue("$author", author);
+-            command.Parameters.AddWithValue("$text", text);
+-            command.ExecuteNonQuery();
+-            transaction.Commit();
+-            var result = Get(connection, id)!;
+-            LoadChildren(connection, new[] { result });
+-            return result;
+-        }
+-    }
+-
+-    public BugReport? EditComment(int id, int ordinal, AddBugCommentRequest request, bool userOnly)
+-    {
+-        var text = RequireText(request.Text, "comment text");
+-        lock (_gate)
+-        {
+-            using var connection = Open();
+-            using var command = connection.CreateCommand();
+-            command.CommandText = userOnly
+-                ? "UPDATE bug_comments SET text=$text,when_utc=$when WHERE report_id=$id AND ordinal=$n AND author='user'; UPDATE bug_reports SET revision=revision+changes() WHERE id=$id"
+-                : "UPDATE bug_comments SET text=$text,when_utc=$when WHERE report_id=$id AND ordinal=$n; UPDATE bug_reports SET revision=revision+changes() WHERE id=$id";
+-            command.Parameters.AddWithValue("$text", text); command.Parameters.AddWithValue("$when", Now());
+-            command.Parameters.AddWithValue("$id", id); command.Parameters.AddWithValue("$n", ordinal);
+-            command.ExecuteNonQuery();
+-            var result=Get(connection,id);
+-            if(result!=null) LoadChildren(connection,new[]{result});
+-            return result;
+-        }
+-    }
+-
+-    public bool Delete(int id)
+-    {
+-        lock (_gate)
+-        {
+-            using var connection = Open();
+-            using var command = connection.CreateCommand();
+-            command.CommandText = "DELETE FROM bug_reports WHERE id=$id";
+-            command.Parameters.AddWithValue("$id", id);
+-            return command.ExecuteNonQuery() != 0;
+-        }
+-    }
+-
+-    /// <summary>§114.4c: store (or replace) the patch of one fix commit. Keyed by full SHA.</summary>
+-    public BugCommitPatch PutCommitPatch(BugCommitPatch patch)
+-    {
+-        var sha = NormalizeSha(patch.Sha);
+-        if (sha.Length < 40) throw new InvalidDataException("A full 40-character commit SHA is required.");
+-        var text = patch.Patch ?? string.Empty;
+-        var truncated = patch.Truncated;
+-        if (text.Length > BugCommitPatch.MaxPatchChars)
+-        {
+-            text = text.Substring(0, BugCommitPatch.MaxPatchChars);
+-            truncated = true;
+-        }
+-        lock (_gate)
+-        {
+-            using var connection = Open();
+-            using var command = connection.CreateCommand();
+-            command.CommandText = @"
+-INSERT INTO bug_commit_patches(sha,subject,message,author,when_utc,files,patch,truncated,stored_utc)
+-VALUES($sha,$subject,$message,$author,$when,$files,$patch,$truncated,$stored)
+-ON CONFLICT(sha) DO UPDATE SET subject=excluded.subject,message=excluded.message,author=excluded.author,
+- when_utc=excluded.when_utc,files=excluded.files,patch=excluded.patch,truncated=excluded.truncated,stored_utc=excluded.stored_utc";
+-            command.Parameters.AddWithValue("$sha", sha);
+-            command.Parameters.AddWithValue("$subject", (patch.Subject ?? string.Empty).Trim());
+-            command.Parameters.AddWithValue("$message", (patch.Message ?? string.Empty).Trim());
+-            command.Parameters.AddWithValue("$author", (patch.Author ?? string.Empty).Trim());
+-            command.Parameters.AddWithValue("$when", (patch.WhenUtc ?? string.Empty).Trim());
+-            command.Parameters.AddWithValue("$files", JsonSerializer.Serialize(patch.Files ?? new List<BugCommitFile>()));
+-            command.Parameters.AddWithValue("$patch", text);
+-            command.Parameters.AddWithValue("$truncated", truncated ? 1 : 0);
+-            command.Parameters.AddWithValue("$stored", Now());
+-            command.ExecuteNonQuery();
+-            return GetCommitPatch(connection, sha)!;
+-        }
+-    }
+-
+-    /// <summary>Full SHA or an unambiguous prefix — old reports carry short SHAs.</summary>
+-    public BugCommitPatch? GetCommitPatch(string shaOrPrefix)
+-    {
+-        lock (_gate)
+-        {
+-            using var connection = Open();
+-            return GetCommitPatch(connection, NormalizeSha(shaOrPrefix));
+-        }
+-    }
+-
+-    /// <summary>Patches for a report's fix commits, keyed by the SHA as written on the report.</summary>
+-    public IReadOnlyDictionary<string, BugCommitPatch> GetCommitPatches(IEnumerable<string> shas)
+-    {
+-        var result = new Dictionary<string, BugCommitPatch>(StringComparer.Ordinal);
+-        lock (_gate)
+-        {
+-            using var connection = Open();
+-            foreach (var sha in shas)
+-            {
+-                if (result.ContainsKey(sha)) continue;
+-                var patch = GetCommitPatch(connection, NormalizeSha(sha));
+-                if (patch != null) result[sha] = patch;
+-            }
+-        }
+-        return result;
+-    }
+-
+-    /// <summary>Every stored SHA — lets a backfill skip what is already there.</summary>
+-    public IReadOnlyList<string> ListCommitPatchShas()
+-    {
+-        lock (_gate)
+-        {
+-            using var connection = Open();
+-            using var command = connection.CreateCommand();
+-            command.CommandText = "SELECT sha FROM bug_commit_patches ORDER BY sha";
+-            using var reader = command.ExecuteReader();
+-            var shas = new List<string>();
+-            while (reader.Read()) shas.Add(reader.GetString(0));
+-            return shas;
+-        }
+-    }
+-
+-    private static BugCommitPatch? GetCommitPatch(SqliteConnection connection, string shaOrPrefix)
+-    {
+-        if (shaOrPrefix.Length < 7) return null;
+-        using var command = connection.CreateCommand();
+-        command.CommandText = @"SELECT sha,subject,message,author,when_utc,files,patch,truncated,stored_utc
+-FROM bug_commit_patches WHERE sha=$sha OR sha LIKE $prefix ORDER BY sha LIMIT 2";
+-        command.Parameters.AddWithValue("$sha", shaOrPrefix);
+-        command.Parameters.AddWithValue("$prefix", shaOrPrefix + "%");
+-        using var reader = command.ExecuteReader();
+-        if (!reader.Read()) return null;
+-        var patch = new BugCommitPatch
+-        {
+-            Sha = reader.GetString(0), Subject = reader.GetString(1), Message = reader.GetString(2),
+-            Author = reader.GetString(3), WhenUtc = reader.GetString(4),
+-            Files = JsonSerializer.Deserialize<List<BugCommitFile>>(reader.GetString(5)) ?? new List<BugCommitFile>(),
+-            Patch = reader.GetString(6), Truncated = reader.GetInt32(7) != 0, StoredUtc = reader.GetString(8),
+-        };
+-        // An ambiguous prefix must not show somebody else's diff as this fix.
+-        return reader.Read() && patch.Sha != shaOrPrefix ? null : patch;
+-    }
+-
+-    private static string NormalizeSha(string? value)
+-    {
+-        var sha = (value ?? string.Empty).Trim().ToLowerInvariant();
+-        foreach (var c in sha)
+-            if (!Uri.IsHexDigit(c)) throw new InvalidDataException("Commit SHA must be hexadecimal.");
+-        return sha;
+-    }
+-
+-    public void ImportJsonOnce(string path)
+-    {
+-        if (!File.Exists(path)) return;
+-        lock (_gate)
+-        {
+-            using var connection = Open();
+-            using var check = connection.CreateCommand();
+-            check.CommandText = "SELECT value FROM bug_meta WHERE key='legacy_json_imported'";
+-            if (check.ExecuteScalar() != null) return;
+-
+-            using var document = JsonDocument.Parse(File.ReadAllText(path));
+-            if (!document.RootElement.TryGetProperty("reports", out var reports) || reports.ValueKind != JsonValueKind.Array)
+-                throw new InvalidDataException("BUGS.json has no reports array.");
+-            using var transaction = connection.BeginTransaction();
+-            foreach (var element in reports.EnumerateArray()) ImportReport(connection, transaction, element);
+-            using var mark = connection.CreateCommand();
+-            mark.Transaction = transaction;
+-            mark.CommandText = "INSERT INTO bug_meta(key,value) VALUES('legacy_json_imported',$value)";
+-            mark.Parameters.AddWithValue("$value", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
+-            mark.ExecuteNonQuery();
+-            transaction.Commit();
+-            Console.WriteLine($"[bugs] imported {reports.GetArrayLength()} reports from {Path.GetFullPath(path)}");
+-        }
+-    }
+-
+-    private void Initialize()
+-    {
+-        lock (_gate)
+-        {
+-            using var connection = Open();
+-            using var command = connection.CreateCommand();
+-            command.CommandText = @"
+-PRAGMA journal_mode=WAL;
+-PRAGMA foreign_keys=ON;
+-CREATE TABLE IF NOT EXISTS bug_reports(
+- id INTEGER PRIMARY KEY AUTOINCREMENT,
+- created_utc TEXT NOT NULL,
+- status TEXT NOT NULL,
+- text TEXT NOT NULL,
+- context TEXT NOT NULL DEFAULT '',
+- assigned_agent TEXT NOT NULL DEFAULT '',
+- agent_handoff TEXT NOT NULL DEFAULT '',
+- fix_commit TEXT NOT NULL DEFAULT '',
+- reported_version TEXT NOT NULL DEFAULT '',
+- ready_version TEXT NOT NULL DEFAULT '',
+- fixed_version TEXT NOT NULL DEFAULT '',
+- archived INTEGER NOT NULL DEFAULT 0,
+- revision INTEGER NOT NULL DEFAULT 1
+-);
+-CREATE TABLE IF NOT EXISTS bug_comments(
+- report_id INTEGER NOT NULL REFERENCES bug_reports(id) ON DELETE CASCADE,
+- ordinal INTEGER NOT NULL,
+- when_utc TEXT NOT NULL,
+- author TEXT NOT NULL,
+- text TEXT NOT NULL,
+- PRIMARY KEY(report_id,ordinal)
+-);
+-CREATE TABLE IF NOT EXISTS bug_fix_commits(
+- report_id INTEGER NOT NULL REFERENCES bug_reports(id) ON DELETE CASCADE,
+- ordinal INTEGER NOT NULL,
+- sha TEXT NOT NULL,
+- PRIMARY KEY(report_id,ordinal), UNIQUE(report_id,sha)
+-);
+-CREATE TABLE IF NOT EXISTS bug_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+-CREATE TABLE IF NOT EXISTS bug_commit_patches(
+- sha TEXT PRIMARY KEY,
+- subject TEXT NOT NULL DEFAULT '',
+- message TEXT NOT NULL DEFAULT '',
+- author TEXT NOT NULL DEFAULT '',
+- when_utc TEXT NOT NULL DEFAULT '',
+- files TEXT NOT NULL DEFAULT '[]',
+- patch TEXT NOT NULL DEFAULT '',
+- truncated INTEGER NOT NULL DEFAULT 0,
+- stored_utc TEXT NOT NULL
+-);
+-CREATE INDEX IF NOT EXISTS ix_bug_reports_status ON bug_reports(status,archived,id);";
+-            command.ExecuteNonQuery();
+-        }
+-    }
+-
+-    private SqliteConnection Open()
+-    {
+-        var connection = new SqliteConnection(_connectionString);
+-        connection.Open();
+-        using var pragma = connection.CreateCommand();
+-        pragma.CommandText = "PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000";
+-        pragma.ExecuteNonQuery();
+-        return connection;
+-    }
+-
+-    private const string SelectReports = @"SELECT id,created_utc,status,text,context,assigned_agent,
+-agent_handoff,fix_commit,reported_version,ready_version,fixed_version,archived,revision FROM bug_reports";
+-
+-    private static BugReport ReadReport(SqliteDataReader reader) => new()
+-    {
+-        Id = reader.GetInt32(0), CreatedUtc = reader.GetString(1), Status = reader.GetString(2),
+-        Text = reader.GetString(3), Context = reader.GetString(4), AssignedAgent = reader.GetString(5),
+-        AgentHandoff = reader.GetString(6), FixCommit = reader.GetString(7),
+-        ReportedInVersion = reader.GetString(8), ReadyForTestInVersion = reader.GetString(9),
+-        FixedInVersion = reader.GetString(10), Archived = reader.GetInt32(11) != 0,
+-        Revision = reader.GetInt64(12),
+-    };
+-
+-    private static BugReport? Get(SqliteConnection connection, int id, SqliteTransaction? transaction = null)
+-    {
+-        using var command = connection.CreateCommand();
+-        command.Transaction = transaction;
+-        command.CommandText = SelectReports + " WHERE id=$id";
+-        command.Parameters.AddWithValue("$id", id);
+-        using var reader = command.ExecuteReader();
+-        return reader.Read() ? ReadReport(reader) : null;
+-    }
+-
+-    private static void LoadChildren(SqliteConnection connection, IEnumerable<BugReport> source)
+-    {
+-        foreach (var report in source)
+-        {
+-            using var comments = connection.CreateCommand();
+-            comments.CommandText = "SELECT when_utc,author,text FROM bug_comments WHERE report_id=$id ORDER BY ordinal";
+-            comments.Parameters.AddWithValue("$id", report.Id);
+-            using (var reader = comments.ExecuteReader())
+-                while (reader.Read()) report.Comments.Add(new BugComment { WhenUtc=reader.GetString(0), Author=reader.GetString(1), Text=reader.GetString(2) });
+-
+-            using var commits = connection.CreateCommand();
+-            commits.CommandText = "SELECT sha FROM bug_fix_commits WHERE report_id=$id ORDER BY ordinal";
+-            commits.Parameters.AddWithValue("$id", report.Id);
+-            using var commitReader = commits.ExecuteReader();
+-            while (commitReader.Read()) report.FixCommits.Add(commitReader.GetString(0));
+-        }
+-    }
+-
+-    private static void ImportReport(SqliteConnection connection, SqliteTransaction transaction, JsonElement e)
+-    {
+-        using var command = connection.CreateCommand();
+-        command.Transaction = transaction;
+-        command.CommandText = @"INSERT OR IGNORE INTO bug_reports
+-(id,created_utc,status,text,context,assigned_agent,agent_handoff,fix_commit,reported_version,ready_version,fixed_version,archived)
+-VALUES($id,$created,$status,$text,$context,$agent,$handoff,$legacy,$reported,$ready,$fixed,$archived)";
+-        command.Parameters.AddWithValue("$id", Int(e,"id"));
+-        command.Parameters.AddWithValue("$created", Str(e,"createdUtc"));
+-        command.Parameters.AddWithValue("$status", Str(e,"status", BugStatuses.Created));
+-        command.Parameters.AddWithValue("$text", Str(e,"text"));
+-        command.Parameters.AddWithValue("$context", Str(e,"context"));
+-        command.Parameters.AddWithValue("$agent", Str(e,"assignedAgent"));
+-        command.Parameters.AddWithValue("$handoff", Str(e,"agentHandoff"));
+-        command.Parameters.AddWithValue("$legacy", Str(e,"fixCommit"));
+-        command.Parameters.AddWithValue("$reported", Str(e,"reportedInVersion"));
+-        command.Parameters.AddWithValue("$ready", Str(e,"readyForTestInVersion"));
+-        command.Parameters.AddWithValue("$fixed", Str(e,"fixedInVersion"));
+-        command.Parameters.AddWithValue("$archived", Bool(e,"archived") ? 1 : 0);
+-        command.ExecuteNonQuery();
+-        var id = Int(e,"id");
+-        if (e.TryGetProperty("comments", out var comments) && comments.ValueKind == JsonValueKind.Array)
+-        {
+-            var n=0;
+-            foreach (var c in comments.EnumerateArray())
+-            {
+-                using var insert=connection.CreateCommand(); insert.Transaction=transaction;
+-                insert.CommandText="INSERT OR IGNORE INTO bug_comments(report_id,ordinal,when_utc,author,text) VALUES($id,$n,$when,$author,$text)";
+-                insert.Parameters.AddWithValue("$id",id); insert.Parameters.AddWithValue("$n",n++);
+-                insert.Parameters.AddWithValue("$when",Str(c,"whenUtc")); insert.Parameters.AddWithValue("$author",Str(c,"author")); insert.Parameters.AddWithValue("$text",Str(c,"text")); insert.ExecuteNonQuery();
+-            }
+-        }
+-        if (e.TryGetProperty("fixCommits", out var commits) && commits.ValueKind == JsonValueKind.Array)
+-            InsertCommits(connection, transaction, id, commits.EnumerateArray().Select(x=>x.GetString() ?? string.Empty));
+-    }
+-
+-    private static void InsertCommits(SqliteConnection connection, SqliteTransaction transaction, int id, IEnumerable<string> commits)
+-    {
+-        var n=0;
+-        foreach (var sha in commits.Where(x=>!string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.Ordinal))
+-        {
+-            using var insert=connection.CreateCommand(); insert.Transaction=transaction;
+-            insert.CommandText="INSERT INTO bug_fix_commits(report_id,ordinal,sha) VALUES($id,$n,$sha)";
+-            insert.Parameters.AddWithValue("$id",id); insert.Parameters.AddWithValue("$n",n++); insert.Parameters.AddWithValue("$sha",sha.Trim()); insert.ExecuteNonQuery();
+-        }
+-    }
+-
+-    private static string RequireText(string? value, string field) =>
+-        string.IsNullOrWhiteSpace(value) ? throw new InvalidDataException($"Empty {field}.") : value.Trim();
+-    private static string Now() => DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture);
+-    private static string Str(JsonElement e,string n,string fallback="") => e.TryGetProperty(n,out var v)&&v.ValueKind==JsonValueKind.String ? v.GetString()??fallback : fallback;
+-    private static int Int(JsonElement e,string n) => e.TryGetProperty(n,out var v)&&v.TryGetInt32(out var x) ? x : 0;
+-    private static bool Bool(JsonElement e,string n) => e.TryGetProperty(n,out var v)&&v.ValueKind==JsonValueKind.True;
+-}
+-
+-public sealed class BugRevisionConflictException : Exception
+-{
+-    public BugRevisionConflictException(long actual) : base("The report changed; reload it before saving.") => ActualRevision = actual;
+-    public long ActualRevision { get; }
+-}
+diff --git a/Server/HexLive.Server/Bugs/BugModels.cs b/Server/HexLive.Server/Bugs/BugModels.cs
+deleted file mode 100644
+index cc01a6bea..000000000
+--- a/Server/HexLive.Server/Bugs/BugModels.cs
++++ /dev/null
+@@ -1,99 +0,0 @@
+-using System;
+-using System.Collections.Generic;
+-using System.Text.Json.Serialization;
+-
+-namespace HexLive.Server.Bugs;
+-
+-public sealed class BugComment
+-{
+-    [JsonPropertyName("whenUtc")] public string WhenUtc { get; set; } = string.Empty;
+-    [JsonPropertyName("author")] public string Author { get; set; } = string.Empty;
+-    [JsonPropertyName("text")] public string Text { get; set; } = string.Empty;
+-}
+-
+-public sealed class BugReport
+-{
+-    [JsonPropertyName("id")] public int Id { get; set; }
+-    [JsonPropertyName("createdUtc")] public string CreatedUtc { get; set; } = string.Empty;
+-    [JsonPropertyName("status")] public string Status { get; set; } = BugStatuses.Created;
+-    [JsonPropertyName("text")] public string Text { get; set; } = string.Empty;
+-    [JsonPropertyName("context")] public string Context { get; set; } = string.Empty;
+-    [JsonPropertyName("assignedAgent")] public string AssignedAgent { get; set; } = string.Empty;
+-    [JsonPropertyName("agentHandoff")] public string AgentHandoff { get; set; } = string.Empty;
+-    [JsonPropertyName("fixCommits")] public List<string> FixCommits { get; set; } = new();
+-    [JsonPropertyName("fixCommit")] public string FixCommit { get; set; } = string.Empty;
+-    [JsonPropertyName("reportedInVersion")] public string ReportedInVersion { get; set; } = string.Empty;
+-    [JsonPropertyName("readyForTestInVersion")] public string ReadyForTestInVersion { get; set; } = string.Empty;
+-    [JsonPropertyName("fixedInVersion")] public string FixedInVersion { get; set; } = string.Empty;
+-    [JsonPropertyName("archived")] public bool Archived { get; set; }
+-    [JsonPropertyName("comments")] public List<BugComment> Comments { get; set; } = new();
+-    [JsonPropertyName("revision")] public long Revision { get; set; }
+-}
+-
+-public sealed class CreateBugRequest
+-{
+-    [JsonPropertyName("text")] public string Text { get; set; } = string.Empty;
+-    [JsonPropertyName("context")] public string Context { get; set; } = string.Empty;
+-    [JsonPropertyName("reportedInVersion")] public string ReportedInVersion { get; set; } = string.Empty;
+-}
+-
+-public sealed class UpdateBugRequest
+-{
+-    [JsonPropertyName("text")] public string? Text { get; set; }
+-    [JsonPropertyName("status")] public string? Status { get; set; }
+-    [JsonPropertyName("assignedAgent")] public string? AssignedAgent { get; set; }
+-    [JsonPropertyName("agentHandoff")] public string? AgentHandoff { get; set; }
+-    [JsonPropertyName("fixCommits")] public List<string>? FixCommits { get; set; }
+-    [JsonPropertyName("readyForTestInVersion")] public string? ReadyForTestInVersion { get; set; }
+-    [JsonPropertyName("fixedInVersion")] public string? FixedInVersion { get; set; }
+-    [JsonPropertyName("archived")] public bool? Archived { get; set; }
+-    [JsonPropertyName("expectedRevision")] public long? ExpectedRevision { get; set; }
+-}
+-
+-public sealed class AddBugCommentRequest
+-{
+-    [JsonPropertyName("author")] public string Author { get; set; } = "user";
+-    [JsonPropertyName("text")] public string Text { get; set; } = string.Empty;
+-}
+-
+-/// <summary>§114.4c: one changed file of a stored fix commit.</summary>
+-public sealed class BugCommitFile
+-{
+-    [JsonPropertyName("path")] public string Path { get; set; } = string.Empty;
+-    [JsonPropertyName("added")] public int Added { get; set; }
+-    [JsonPropertyName("deleted")] public int Deleted { get; set; }
+-    /// <summary>true when git printed «-» for the counts (binary or LFS payload).</summary>
+-    [JsonPropertyName("binary")] public bool Binary { get; set; }
+-}
+-
+-/// <summary>
+-/// §114.4c: the patch of a fix commit, uploaded by the agent from its checkout.
+-/// The server has no repository, so the diff the player reads in the card is
+-/// exactly what the agent committed; the tracker stores it once per SHA.
+-/// </summary>
+-public sealed class BugCommitPatch
+-{
+-    public const int MaxPatchChars = 1_000_000;
+-
+-    [JsonPropertyName("sha")] public string Sha { get; set; } = string.Empty;
+-    [JsonPropertyName("subject")] public string Subject { get; set; } = string.Empty;
+-    [JsonPropertyName("message")] public string Message { get; set; } = string.Empty;
+-    [JsonPropertyName("author")] public string Author { get; set; } = string.Empty;
+-    [JsonPropertyName("whenUtc")] public string WhenUtc { get; set; } = string.Empty;
+-    [JsonPropertyName("files")] public List<BugCommitFile> Files { get; set; } = new();
+-    [JsonPropertyName("patch")] public string Patch { get; set; } = string.Empty;
+-    [JsonPropertyName("truncated")] public bool Truncated { get; set; }
+-    [JsonPropertyName("storedUtc")] public string StoredUtc { get; set; } = string.Empty;
+-}
+-
+-public static class BugStatuses
+-{
+-    public const string Created = "created";
+-    public const string InProgress = "in_progress";
+-    public const string ReadyForTest = "ready_for_test";
+-    public const string Fixed = "fixed";
+-    public const string Rework = "rework";
+-
+-    public static bool IsValid(string? value) => value is
+-        Created or InProgress or ReadyForTest or Fixed or Rework;
+-}
+diff --git a/Server/HexLive.Server/HexLive.Server.csproj b/Server/HexLive.Server/HexLive.Server.csproj
+index 7239462b5..63e5b7cac 100644
+--- a/Server/HexLive.Server/HexLive.Server.csproj
++++ b/Server/HexLive.Server/HexLive.Server.csproj
+@@ -3,9 +3,8 @@
+   <!--
+     Headless HexLive: the colony keeps living with no Unity anywhere.
+ 
+-    The simulation remains package-free. The server host has one deliberate
+-    infrastructure dependency: Microsoft.Data.Sqlite, used by the central
+-    bug tracker (§114). The self-contained publish carries SQLite with it.
++    The simulation remains package-free. Bug tracking (§114) is hosted by
++    standalone Flashback; this game server has no tracker storage or writers.
+   -->
+ 
+   <PropertyGroup>
+@@ -24,10 +23,6 @@
+     <ProjectReference Include="../../HexLive.Simulation.Standalone.csproj" />
+   </ItemGroup>
+ 
+-  <ItemGroup>
+-    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.0.0" />
+-  </ItemGroup>
+-
+   <!-- §58.7: generated from canonical I2 terms; never a hand-authored C# name table. -->
+   <ItemGroup>
+     <EmbeddedResource Include="Mcp/npc-names.json" LogicalName="HexLive.Mcp.NpcNames.json" />
+diff --git a/Server/HexLive.Server/Program.cs b/Server/HexLive.Server/Program.cs
+index c1d24324f..3bdcf1570 100644
+--- a/Server/HexLive.Server/Program.cs
++++ b/Server/HexLive.Server/Program.cs
+@@ -159,10 +159,6 @@ public static class Program
+         var account = Admin.AdminAccount.LoadOrCreate(options.AdminAccountPath);
+         var sessions = new Admin.AdminSessions();
+         var mailer = new Admin.AdminMailer();
+-        var bugToken = AccessTokenFile.LoadOrCreate(
+-            options.BugTokenPath, "BUG TRACKER API — agent access", "hexbug_");
+-        var bugs = new Bugs.BugDatabase(options.BugDatabasePath);
+-        bugs.ImportJsonOnce(options.BugImportPath);
+ 
+         // Пути — АБСОЛЮТНЫМИ и всегда. Сейв задаётся относительным путём, и
+         // запуск из другой папки молча заводит ДРУГОЙ мир и ДРУГОЙ админ-файл
+@@ -171,7 +167,6 @@ public static class Program
+         // целый вечер такой археологии.
+         Console.WriteLine($"[server] save file     {Path.GetFullPath(options.SavePath)}");
+         Console.WriteLine($"[server] admin account {Path.GetFullPath(options.AdminAccountPath)}");
+-        Console.WriteLine($"[server] bug database  {Path.GetFullPath(options.BugDatabasePath)}");
+ 
+         Console.WriteLine($"[server] asset root    {assetRegistry.RootPath}");
+         Console.WriteLine($"[server] admin icons  {options.AdminIconRoot ?? "disabled"}");
+@@ -329,9 +324,9 @@ public static class Program
+ 
+         Admin.AdminEndpoints.Map(
+             app, worlds, account, sessions, mailer, lifetime, assetRegistry, assetCatalog,
+-            options.AdminIconRoot, bugs);
++            options.AdminIconRoot);
+         WorldCreationEndpoints.Map(app, worlds, account, sessions, assetRegistry, options.CompanionProfile, playerToken);
+-        Bugs.BugApiEndpoints.Map(app, bugs, bugToken, playerToken, sessions);
++        RetiredBugTracker.Map(app);
+ 
+         if (options.McpEnabled)
+         {
+@@ -735,17 +730,6 @@ public sealed class ServerOptions
+     public string PlayerTokenPath =>
+         Path.Combine(Path.GetDirectoryName(Path.GetFullPath(SavePath)) ?? ".", "hexlive-player.txt");
+ 
+-    /// <summary>§114: central SQLite bug tracker, colocated with the save.</summary>
+-    public string BugDatabasePath =>
+-        Path.Combine(Path.GetDirectoryName(Path.GetFullPath(SavePath)) ?? ".", "hexlive-bugs.sqlite3");
+-
+-    public string BugTokenPath =>
+-        Path.Combine(Path.GetDirectoryName(Path.GetFullPath(SavePath)) ?? ".", "hexlive-bugs-token.txt");
+-
+-    /// <summary>One-shot legacy import. The database records completion.</summary>
+-    public string BugImportPath =>
+-        Path.Combine(Path.GetDirectoryName(Path.GetFullPath(SavePath)) ?? ".", "BUGS.json");
+-
+     /// <summary>§149: постоянные назначения playerId → npcIds живут рядом с
+     /// тем же сейвом и переносятся вместе с серверным runtime-каталогом.</summary>
+     public string PlayerAssignmentsPath =>
+diff --git a/Server/HexLive.Server/RetiredBugTracker.cs b/Server/HexLive.Server/RetiredBugTracker.cs
+new file mode 100644
+index 000000000..15ec30441
+--- /dev/null
++++ b/Server/HexLive.Server/RetiredBugTracker.cs
+@@ -0,0 +1,30 @@
++using Microsoft.AspNetCore.Builder;
++using Microsoft.AspNetCore.Http;
++
++namespace HexLive.Server;
++
++/// <summary>§114: reject stale clients without opening or creating any legacy storage.</summary>
++public static class RetiredBugTracker
++{
++    public const string Url = "https://flashback.62-146-235-120.sslip.io";
++
++    public static void Map(WebApplication app)
++    {
++        app.Use(async (HttpContext context, RequestDelegate next) =>
++        {
++            if (context.Request.Path.StartsWithSegments("/api/bugs/v1") ||
++                context.Request.Path.StartsWithSegments("/admin/bugs"))
++            {
++                context.Response.Headers.CacheControl = "no-store";
++                await Results.Json(new
++                {
++                    error = "Legacy bug tracker retired. Use Flashback. Legacy Singapore report IDs may differ; find the report before editing.",
++                    url = Url,
++                    api = Url + "/api/bugs/v1",
++                }, statusCode: StatusCodes.Status410Gone).ExecuteAsync(context);
++                return;
++            }
++            await next(context);
++        });
++    }
++}
+diff --git a/Spec/114.md b/Spec/114.md
+index 9cfd135de..0b08d3132 100644
+--- a/Spec/114.md
++++ b/Spec/114.md
+@@ -1,18 +1,25 @@
+ ## §114 Баг-трекер в игре (iteration 114)
+ 
+-Микро-джира между игроком и агентом, не выходя из Play: кнопка **Bug tracker**
+-в левой дебаг-панели открывает окно, где игрок текстом описывает баг и жмёт
+-«Отправить». Единое хранилище — SQLite `hexlive-bugs.sqlite3` рядом с серверным
+-сейвом. Игра, агент и веб-админка работают с одними строками через
+-`/api/bugs/v1`; игра опрашивает список раз в две секунды. Новый отчёт можно
+-создать без токена, чтобы сообщить даже об ошибке авторизации. Чтение доступно
+-игре, а изменение существующего отчёта требует токена игрока, отдельного
+-агентского Bearer-токена или админ-сессии. `-hexlive-bugs-api <url>` переопределяет
+-API для теста; иначе адрес выводится из выбранного игрового сервера.
+-
+-Старый `BUGS.json` импортируется в БД ровно один раз с сохранением id,
+-комментариев, версий и коммитов. После импорта он не является хранилищем
+-отчётов; в нём временно остаётся только независимый лиз Unity MCP (§114.7).
++**Production migration — 2026-09-10.** Единое хранилище отчётов — PostgreSQL
++самостоятельного Flashback в Сингапуре. UI:
++`https://flashback.62-146-235-120.sslip.io`; API: тот же origin + `/api/bugs/v1`.
++Игра сохраняет встроенное окно как HTTP-клиент; агенты используют `bugs.py`.
++Все запросы требуют Bearer-ключа Flashback. Ключ агента разрешает
++`created/in_progress/ready_for_test/rework`, ключ игрока — все статусы;
++управление ключами доступно только администратору Flashback.
++`-hexlive-bugs-api <url>` переопределяет API отдельного инстанса, иначе игра,
++агенты и build scripts используют прямой URL Flashback, независимо от игрового сервера.
++
++Встроенные SQLite, импорт `BUGS.json`, серверные CRUD-ручки и старая веб-админка
++удалены из HexLive.Server. Прямые обращения к `/api/bugs/v1` и `/admin/bugs`
++на игровом сервере получают **410 Gone**, включая любые методы записи.
++Игровая админка содержит только ссылку на Flashback. Совместимый HTTPS-прокси
++Нью-Йорка ведёт в Flashback; сингапурский старый адрес возвращает 410, поскольку
++номера отдельных карточек в его независимой базе пересеклись с Нью-Йорком.
++При финальной сверке недостающие отчёты, комментарии и патчи переносятся,
++конфликтующие номера получают новые ID с отметкой исходного номера.
++Архивы SQLite сохраняются вне runtime-каталога, запуск игры их не открывает
++и не создаёт новый баг-трекер. `BUGS.json` остаётся только файлом лиза Unity MCP.
+ 
+ **114.0 API и конкурентность.** `GET /api/bugs/v1/reports` и `GET .../{id}`
+ читают отчёты; `POST /reports` создаёт, `POST /reports/{id}` меняет поля и
+@@ -20,11 +27,9 @@ API для теста; иначе адрес выводится из выбра
+ редактирует комментарий, `POST .../{id}/delete` и `DELETE .../{id}` удаляют.
+ `GET /api/bugs/v1/commits` перечисляет SHA сохранённых патчей, `GET
+ .../commits/{sha}` отдаёт патч (по полному SHA или однозначному префиксу),
+-`PUT .../commits/{sha}` сохраняет его — только с агентским токеном или
+-админ-сессией (§114.4c).
++`PUT .../commits/{sha}` сохраняет его — с ключом доступа Flashback (§114.4c).
+ У строки есть монотонная `revision`; агент может передать `expectedRevision`,
+-и устаревшая запись получит 409 вместо потери чужой правки. SQLite работает в
+-WAL, изменения отчёта, комментариев и списка коммитов транзакционны.
++и устаревшая запись получит 409 вместо потери чужой правки. Изменения отчёта, комментариев и списка коммитов транзакционны в PostgreSQL.
+ 
+ **114.1 Два окна, статусы и история.** Кнопка отправки открывает маленькое
+ центрированное окно; менеджер — отдельное большое окно с вкладками
+@@ -50,40 +55,14 @@ WAL, изменения отчёта, комментариев и списка 
+ закончил работу, но ещё ничего не подтвердил за игрока. Обновляется лениво
+ (раз в 2 с, сетевой poll).
+ 
+-**114.3A Веб-админка.** `/admin/bugs` использует существующую защищённую
+-админ-сессию и визуальный язык игрового окна: тёмные карточки, цветные chips
+-статусов, вкладка/фильтр, история и контекст. В ней можно создать, найти,
+-открыть, редактировать, комментировать, менять статус и удалить отчёт. Кнопка
+-**↻ Повтори** переводит отчёт в `rework`, очищает build-штампы исправления и
+-добавляет пояснение игрока. Все POST-формы используют Post/Redirect/Get с
+-URL-кодированным текстом результата: после создания открывается уже
+-обновлённый список с тостом **Отправлено**, после правки остаётся карточка с
+-тостом **Сохранено**. Обновление страницы не повторяет POST.
+-Шапка списка и панель поиска/статуса закреплены у верхнего края и остаются
+-доступны при прокрутке. Форма нового отчёта не занимает постоянное место: её
+-открывает кнопка **+ Новый отчёт** в отдельном модальном окне. Отфильтрованные
+-карточки выводятся по 24 на страницу; компактная пагинация сохраняет поисковый
+-запрос и выбранный статус.
+-
+-**114.3B Отчёт открывается в панели поверх списка.** Список — это страница;
+-клик по карточке не уводит с неё, а открывает отчёт в модальной панели у
+-правого края (`<dialog>`), которую сервер отдаёт фрагментом по тому же URL
+-`/admin/bugs/{id}` с заголовком `X-Requested-With: fetch`. Документ списка не
+-перезагружается, поэтому положение прокрутки и текущая страница/фильтр
+-сохраняются сами собой. В историю браузера кладётся одна запись на открытый
+-отчёт: адрес в строке — `/admin/bugs/{id}`, и его можно скопировать; крестик,
+-Esc, клик по затемнению или кнопка «назад» закрывают панель и возвращают адрес
+-списка. Прямой переход по `/admin/bugs/{id}` рисует список с уже открытой
+-панелью, а «назад» из неё ведёт к списку, не покидая трекер. Формы внутри
+-панели (описание/статус/агент/handoff/архив, комментарий, **↻ Повтори**,
+-удаление) отправляются через `fetch` и получают в ответ перерисованный
+-фрагмент отчёта с текстом тоста; обычная отправка формы без скрипта по-прежнему
+-идёт через PRG §114.3A. После каждой такой мутации и при каждом закрытии панели
+-карточки списка перечитываются с сервера (`GET /admin/bugs?…` тем же
+-заголовком отдаёт только карточки и пагинацию), поэтому статус на карточке за
+-панелью — прочитанный, а не запомненный, и правки агента, сделанные пока
+-панель была открыта, тоже видны; прокрутка при подмене карточек не сбрасывается.
+-Карточка показывает счётчики коммитов и комментариев.
++**114.3A Веб-интерфейс.** Самостоятельный Flashback отвечает за список,
++статусы, поиск, пагинацию и редактор карточки. Вход — ключом доступа;
++права на статусы проверяются API. Создание ключей доступно администратору.
++
++**114.3B Карточка поверх списка.** Flashback открывает отчёт по `?bug=<id>`
++в панели поверх списка; закрытие и «назад» сохраняют фильтры, страницу
++и прокрутку. После успешного «Исправлено» карточка закрывается. Изменения
++поступают в UI в реальном времени. Старых HTML-форм `/admin/bugs` больше нет.
+ 
+ **114.4 Схема и конкурентная запись.** Старые отчёты остаются валидны;
+ необязательные поля — `reportedInVersion`, `readyForTestInVersion`,
+@@ -153,8 +132,8 @@ numbers, ставит `readyForTestInVersion` строго id из старто
+ **🟠 Не в этой сборке**. Поэтому фикс, законченный во время уже идущей сборки,
+ не выдаётся за попавший в неё.
+ 
+-**114.6 Код и локализация.** `Server/HexLive.Server/Bugs/` (SQLite, API и
+-веб-админка), `UI/BugReportStore.cs` (HTTP-клиент), `UI/BugReportPanel.cs`
++**114.6 Код и локализация.** Самостоятельный Flashback (PostgreSQL, API и
++веб-интерфейс), `UI/BugReportStore.cs` (HTTP-клиент), `UI/BugReportPanel.cs`
+ (два игровых окна), `HexLiveBuildVersioning.cs` (двухфазная версия). Новые
+ пользовательские строки игры живут в I2 на RU/EN.
+ 
+diff --git a/Tests/HexLive.Server.Tests/BugAdminPageTests.cs b/Tests/HexLive.Server.Tests/BugAdminPageTests.cs
+deleted file mode 100644
+index 8442ed5d2..000000000
+--- a/Tests/HexLive.Server.Tests/BugAdminPageTests.cs
++++ /dev/null
+@@ -1,94 +0,0 @@
+-using System;
+-using System.Collections.Generic;
+-using System.Linq;
+-using HexLive.Server.Bugs;
+-using Microsoft.AspNetCore.Http;
+-using NUnit.Framework;
+-
+-namespace HexLive.Server.Tests;
+-
+-[TestFixture]
+-public sealed class BugAdminPageTests
+-{
+-    [Test]
+-    public void RussianNoticeIsEncodedIntoRedirectLocation()
+-    {
+-        var result=BugAdminEndpoints.RedirectWithNotice("/admin/bugs/7", "Сохранено");
+-
+-        Assert.That(result,Is.TypeOf<Microsoft.AspNetCore.Http.HttpResults.RedirectHttpResult>());
+-        var redirect=(Microsoft.AspNetCore.Http.HttpResults.RedirectHttpResult)result;
+-        Assert.That(redirect.Url,Is.EqualTo("/admin/bugs/7?notice="+Uri.EscapeDataString("Сохранено")));
+-        Assert.That(redirect.Url!.All(c=>c<=127),Is.True,
+-            "Location must contain ASCII only; raw Cyrillic produced the 404 regression.");
+-    }
+-
+-    [Test]
+-    public void ListShowsAccessibleAutoClosingNoticeAndNewestReport()
+-    {
+-        var report=new BugReport { Id=7,Text="новый баг",Status=BugStatuses.Created };
+-
+-        var html=BugAdminPages.List(new[]{report},string.Empty,string.Empty,"Отправлено");
+-
+-        Assert.That(html,Does.Contain("role='status'").And.Contain("Отправлено"));
+-        Assert.That(html,Does.Contain("setTimeout").And.Contain("/admin/bugs/7"));
+-    }
+-
+-    [Test]
+-    public void ListUsesStickyFiltersModalCreationAndPagination()
+-    {
+-        var reports=Enumerable.Range(1,30)
+-            .Select(id=>new BugReport { Id=id,Text="баг "+id,Status=BugStatuses.Created })
+-            .ToArray();
+-
+-        var first=BugAdminPages.List(reports,BugStatuses.Created,"баг",string.Empty,1);
+-        var second=BugAdminPages.List(reports,BugStatuses.Created,"баг",string.Empty,2);
+-
+-        Assert.That(first,Does.Contain("class='sticky-head'")
+-            .And.Contain("<dialog id='new-bug'>")
+-            .And.Contain("+ Новый отчёт")
+-            .And.Contain("aria-label='Страницы'"));
+-        Assert.That(first,Does.Contain("/admin/bugs/30").And.Not.Contain("/admin/bugs/6'"));
+-        Assert.That(second,Does.Contain("/admin/bugs/6")
+-            .And.Contain("status=created&amp;q=%D0%B1%D0%B0%D0%B3&amp;page=1"));
+-    }
+-
+-    [Test]
+-    public void ListOpensReportsInPanelAndDirectLinkPreloadsIt()
+-    {
+-        var report=new BugReport { Id=7,Text="баг",Status=BugStatuses.ReadyForTest,FixCommits={"abc1234567890"} };
+-
+-        var list=BugAdminPages.List(new[]{report},string.Empty,string.Empty,string.Empty);
+-        var direct=BugAdminPages.List(new[]{report},string.Empty,string.Empty,string.Empty,1,report,new Dictionary<string,BugCommitPatch>());
+-
+-        Assert.That(list,Does.Contain("<dialog id='bug-panel'").And.Contain("data-list-url='/admin/bugs'")
+-            .And.Contain("data-bug='7' href='/admin/bugs/7'").And.Contain("X-Requested-With").And.Contain("history.pushState"));
+-        Assert.That(list,Does.Not.Contain("class='detail'"),"nothing is open until a card is clicked");
+-        Assert.That(direct,Does.Contain("class='detail' data-bug='7'").And.Contain("data-close"),"a shared link shows the report over the list");
+-        Assert.That(BugAdminPages.ListFragment(new[]{report},string.Empty,string.Empty),Does.StartWith("<main class='cards' data-count='1'>").And.Not.Contain("<dialog"));
+-        Assert.That(BugAdminPages.Deleted("Удалено"),Does.Contain("data-deleted='1'").And.Contain("data-notice='Удалено'"));
+-    }
+-
+-    [Test]
+-    public void DetailRendersCommitPatchAsExpandableColouredDiffAndLinksMissingOnes()
+-    {
+-        var sha=new string('a',40);
+-        var report=new BugReport { Id=7,Text="баг",Status=BugStatuses.Fixed,FixCommits={sha.Substring(0,9),"bbbbbbbbb"} };
+-        var patch=new BugCommitPatch
+-        {
+-            Sha=sha,Subject="fix(bug-7): починил",Message="fix(bug-7): починил\n\nПодробности.\n\nBug: #7",Author="Анатолий",WhenUtc="2026-09-03T10:00:00+07:00",
+-            Files={new BugCommitFile{Path="Assets/A.cs",Added=2,Deleted=1},new BugCommitFile{Path="img.png",Binary=true}},
+-            Patch="diff --git a/Assets/A.cs b/Assets/A.cs\nindex 1..2 100644\n--- a/Assets/A.cs\n+++ b/Assets/A.cs\n@@ -1,2 +1,3 @@\n context\n-old <b>\n+new\n+--- looks like a header but is a removed SQL comment\ndiff --git a/img.png b/img.png\nBinary files differ\n",
+-        };
+-
+-        var html=BugAdminPages.Detail(report,new Dictionary<string,BugCommitPatch>{[sha.Substring(0,9)]=patch},"Сохранено");
+-
+-        Assert.That(html,Does.Contain("data-notice='Сохранено'"));
+-        Assert.That(html,Does.Contain("<details class='commit'>").And.Contain("fix(bug-7): починил").And.Contain("2 файла").And.Contain("<span class='add'>+2</span>"));
+-        Assert.That(html,Does.Contain("<pre class='message'>").And.Contain("Подробности."),"the body of the message beyond the subject is shown");
+-        Assert.That(html,Does.Contain("<a href='#caaaaaaaaaa-f0'>Assets/A.cs</a>").And.Contain("id='caaaaaaaaaa-f1'>img.png</span>"));
+-        Assert.That(html,Does.Contain("<span class='del'>-old &lt;b&gt;</span>").And.Contain("<span class='add'>+new</span>").And.Contain("<span class='hunk'>@@ -1,2 +1,3 @@</span>").And.Contain("<span class='ctx'> context</span>"));
+-        Assert.That(html,Does.Contain("<span class='add'>+--- looks like"),"inside a hunk a +/- line is content, not a file header");
+-        Assert.That(html,Does.Contain("<span class='meta'>--- a/Assets/A.cs</span>").And.Contain("<span class='meta'>Binary files differ</span>"));
+-        Assert.That(html,Does.Contain("<div class='commit missing'><code>bbbbbbbbb</code>").And.Contain(BugAdminPages.GitHubCommitBase+"bbbbbbbbb"));
+-    }
+-}
+diff --git a/Tests/HexLive.Server.Tests/BugDatabaseTests.cs b/Tests/HexLive.Server.Tests/BugDatabaseTests.cs
+deleted file mode 100644
+index 6de6b3eca..000000000
+--- a/Tests/HexLive.Server.Tests/BugDatabaseTests.cs
++++ /dev/null
+@@ -1,95 +0,0 @@
+-using System;
+-using System.IO;
+-using System.Linq;
+-using HexLive.Server.Bugs;
+-using NUnit.Framework;
+-
+-namespace HexLive.Server.Tests;
+-
+-[TestFixture]
+-public sealed class BugDatabaseTests
+-{
+-    private string _directory = null!;
+-
+-    [SetUp]
+-    public void SetUp()
+-    {
+-        _directory=Path.Combine(Path.GetTempPath(),"hexlive-bugs-"+Guid.NewGuid().ToString("N"));
+-        Directory.CreateDirectory(_directory);
+-    }
+-
+-    [TearDown]
+-    public void TearDown() => Directory.Delete(_directory,true);
+-
+-    [Test]
+-    public void CreateUpdateCommentAndDeleteAreTransactional()
+-    {
+-        var db=new BugDatabase(Path.Combine(_directory,"bugs.sqlite3"));
+-        var created=db.Create(new CreateBugRequest { Text="сломалось",Context="seed=7 tick=12",ReportedInVersion="0.9" });
+-        Assert.That(created.Id,Is.EqualTo(1));
+-        var updated=db.Update(created.Id,new UpdateBugRequest { Status=BugStatuses.InProgress,AssignedAgent="/root",ExpectedRevision=created.Revision });
+-        Assert.That(updated!.Revision,Is.EqualTo(created.Revision+1));
+-        db.AddComment(created.Id,new AddBugCommentRequest { Author="codex",Text="Взял в работу." });
+-        var read=db.Get(created.Id)!;
+-        Assert.That(read.Comments.Single().Author,Is.EqualTo("codex"));
+-        Assert.That(read.Status,Is.EqualTo(BugStatuses.InProgress));
+-        Assert.That(db.Delete(created.Id),Is.True);
+-        Assert.That(db.Get(created.Id),Is.Null);
+-    }
+-
+-    [Test]
+-    public void LegacyImportRunsOnceAndPreservesIdsAndHistory()
+-    {
+-        var json=Path.Combine(_directory,"BUGS.json");
+-        File.WriteAllText(json,"""
+-        {"nextId":10,"reports":[{"id":7,"createdUtc":"now","status":"ready_for_test","text":"x","context":"seed=1","fixCommits":["abc"],"comments":[{"whenUtc":"then","author":"codex","text":"done"}]}]}
+-        """);
+-        var db=new BugDatabase(Path.Combine(_directory,"bugs.sqlite3"));
+-        db.ImportJsonOnce(json);
+-        db.ImportJsonOnce(json);
+-        var report=db.Get(7)!;
+-        Assert.That(report.FixCommits,Is.EqualTo(new[]{"abc"}));
+-        Assert.That(report.Comments,Has.Count.EqualTo(1));
+-        Assert.That(db.Create(new CreateBugRequest { Text="next" }).Id,Is.EqualTo(8));
+-    }
+-
+-    [Test]
+-    public void CommitPatchIsStoredOncePerShaAndFoundByPrefix()
+-    {
+-        var db=new BugDatabase(Path.Combine(_directory,"bugs.sqlite3"));
+-        var sha=new string('a',40);
+-        var stored=db.PutCommitPatch(new BugCommitPatch
+-        {
+-            Sha=sha.ToUpperInvariant(),Subject="fix(bug-1): x",Message="fix(bug-1): x\n\nBug: #1",Author="me",WhenUtc="2026-09-03",
+-            Files={new BugCommitFile{Path="A.cs",Added=3,Deleted=1}},Patch="diff --git a/A.cs b/A.cs\n@@ -1 +1 @@\n-a\n+b\n",
+-        });
+-        Assert.That(stored.Sha,Is.EqualTo(sha));
+-        Assert.That(stored.StoredUtc,Is.Not.Empty);
+-
+-        db.PutCommitPatch(new BugCommitPatch { Sha=sha,Subject="replaced",Patch="p" });
+-        Assert.That(db.ListCommitPatchShas(),Is.EqualTo(new[]{sha}));
+-        Assert.That(db.GetCommitPatch(sha.Substring(0,9))!.Subject,Is.EqualTo("replaced"),"old reports carry short SHAs");
+-        Assert.That(db.GetCommitPatch("abc"),Is.Null,"too short to be a commit reference");
+-
+-        var patches=db.GetCommitPatches(new[]{sha.Substring(0,9),new string('b',40)});
+-        Assert.That(patches.Keys,Is.EqualTo(new[]{sha.Substring(0,9)}),"keyed as written on the report; missing ones are absent, not null");
+-    }
+-
+-    [Test]
+-    public void CommitPatchRejectsBadShaAndAmbiguousPrefixAndCapsSize()
+-    {
+-        var db=new BugDatabase(Path.Combine(_directory,"bugs.sqlite3"));
+-        Assert.Throws<InvalidDataException>(()=>db.PutCommitPatch(new BugCommitPatch { Sha="9e257f5d2" }),"a short SHA cannot be a storage key");
+-        Assert.Throws<InvalidDataException>(()=>db.PutCommitPatch(new BugCommitPatch { Sha=new string('z',40) }));
+-
+-        var big=db.PutCommitPatch(new BugCommitPatch { Sha=new string('c',40),Patch=new string('x',BugCommitPatch.MaxPatchChars+10) });
+-        Assert.That(big.Patch.Length,Is.EqualTo(BugCommitPatch.MaxPatchChars));
+-        Assert.That(big.Truncated,Is.True);
+-
+-        db.PutCommitPatch(new BugCommitPatch { Sha="c"+new string('d',39) });
+-        Assert.That(db.GetCommitPatch("c"),Is.Null);
+-        Assert.That(db.GetCommitPatch("cccccccc"),Is.Not.Null);
+-        Assert.That(db.GetCommitPatch("cdcdcdcd"),Is.Null,"no such commit");
+-        Assert.That(db.GetCommitPatches(new[]{"cccccccc"}).Count,Is.EqualTo(1));
+-    }
+-}
+diff --git a/Tests/HexLive.Server.Tests/RetiredBugTrackerTests.cs b/Tests/HexLive.Server.Tests/RetiredBugTrackerTests.cs
+new file mode 100644
+index 000000000..0d8dd33f4
+--- /dev/null
++++ b/Tests/HexLive.Server.Tests/RetiredBugTrackerTests.cs
+@@ -0,0 +1,35 @@
++using System.Net;
++using System.Net.Http;
++using System.Threading.Tasks;
++using Microsoft.AspNetCore.Builder;
++using Microsoft.AspNetCore.Hosting;
++using Microsoft.AspNetCore.Hosting.Server;
++using Microsoft.AspNetCore.Hosting.Server.Features;
++using Microsoft.AspNetCore.Http;
++using Microsoft.Extensions.DependencyInjection;
++using NUnit.Framework;
++
++namespace HexLive.Server.Tests;
++
++public sealed class RetiredBugTrackerTests
++{
++    [Test]
++    public async Task LegacyRoutesRejectEveryVerbWhileGameRoutesStillWork()
++    {
++        var builder = WebApplication.CreateBuilder();
++        builder.WebHost.UseUrls("http://127.0.0.1:0");
++        await using var app = builder.Build();
++        RetiredBugTracker.Map(app);
++        app.MapGet("/", () => Results.Ok("world"));
++        await app.StartAsync();
++        var addresses = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!;
++        using var client = new HttpClient { BaseAddress = new System.Uri(System.Linq.Enumerable.Single(addresses.Addresses)) };
++        foreach (var path in new[] { "/api/bugs/v1", "/api/bugs/v1/reports", "/api/bugs/v1/reports/1/comments", "/api/bugs/v1/commits/deadbeef", "/admin/bugs", "/admin/bugs/1" })
++        foreach (var method in new[] { HttpMethod.Get, HttpMethod.Post, HttpMethod.Put, HttpMethod.Patch, HttpMethod.Delete, HttpMethod.Head })
++        {
++            using var response = await client.SendAsync(new HttpRequestMessage(method, path));
++            Assert.That(response.StatusCode, Is.EqualTo(HttpStatusCode.Gone), $"{method} {path}");
++        }
++        Assert.That(await client.GetStringAsync("/"), Does.Contain("world"));
++    }
++}
 diff --git a/Tools/build_release.py b/Tools/build_release.py
-index c959ffd0c..d7aabd3dd 100755
+index 71e33405e..95b90037c 100755
 --- a/Tools/build_release.py
 +++ b/Tools/build_release.py
 @@ -24,7 +24,7 @@ DEFAULT_DISTRIBUTION = Path.home() / "hex-girls"
@@ -169,34 +1949,3 @@ index 8921082d2..34d3625bd 100644
                  reports = json.loads(response.read().decode("utf-8"))
      except Exception as error:
          raise RuntimeError(f"Could not read bug API {BUG_API}: {error}") from error
-diff --git a/CLAUDE.md b/CLAUDE.md
-index 0bf5f766a..74a916e6a 100644
---- a/CLAUDE.md
-+++ b/CLAUDE.md
-@@ -49,7 +49,10 @@ obstacle-блокировки, зоны падения/спавна, пути и
- 
- ## ⭐ Server bug tracker (spec §114)
- 
--The player files bugs from inside the game into the central server SQLite store.
-+The player files bugs into Flashback PostgreSQL in Singapore:
-+`https://flashback.62-146-235-120.sslip.io/api/bugs/v1`. The previous production
-+API address proxies to it. Updated clients send Bearer on every request; older game builds need the authenticated creation fix.
-+The old SQLite store is retired. Flashback requires Bearer authentication on every request, including GET and creation. Agent keys cannot confirm fixed, archive, delete, or manage keys.
- When the user says «разбери баги» / «посмотри баг-трекер», use the project skill
- `.agents/skills/hexlive-bug-tracker/SKILL.md`; do not read the retired reports
- array in `BUGS.json`.
-@@ -77,11 +80,12 @@ array in `BUGS.json`.
-   history flag for a confirmed fix. Permanent deletion is an explicit player
-   or administrator action, never part of the agent workflow.
- - The game polls `/api/bugs/v1/reports` and sends mutations to the same API;
--  the web admin at `/admin/bugs` is another surface over the same rows.
-+  the old `/admin/bugs` redirects to the Flashback web UI over the same rows.
- - `BUGS.json` is retained only for the Unity MCP lease. Its historical reports
-   are imported into SQLite once and must not be edited or reintroduced.
- 
--Code: `Server/HexLive.Server/Bugs/` (SQLite + API + admin),
-+Tracker: `https://github.com/shtolyan/flashback` (PostgreSQL + compatible API + UI).
-+Legacy code: `Server/HexLive.Server/Bugs/` (retired SQLite API/admin),
- `UnityPresentation/UI/BugReportStore.cs` (HTTP client),
- `UI/BugReportPanel.cs` (window), button in `DebugControlsPanel`.
- Основной текст существующего отчёта игрок может отредактировать из карточки;

@@ -24,7 +24,7 @@
     "android": "npm run android -w @flashback/client",
     "build:web": "npm run build:web -w @flashback/client",
     "typecheck": "tsc --noEmit && npm run typecheck -w @flashback/client",
-    "test": "tsx --test tests/api.test.ts tests/import.test.ts",
+    "test": "tsx --test tests/api.test.ts tests/import.test.ts tests/legacy-merge.test.ts",
     "test:ui": "playwright test",
     "access": "tsx scripts/access.ts"
   },
