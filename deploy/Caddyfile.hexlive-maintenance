@@ -1,0 +1,11 @@
+163-245-204-96.sslip.io {
+	encode zstd gzip
+	@bugWrites {
+		path /api/bugs/v1 /api/bugs/v1/*
+		not method GET HEAD OPTIONS
+	}
+	respond @bugWrites "Bug tracker migration in progress. Retry shortly." 503
+	@bugAdmin path /admin/bugs /admin/bugs/*
+	respond @bugAdmin "Bug tracker migration in progress. Retry shortly." 503
+	reverse_proxy 127.0.0.1:5123
+}

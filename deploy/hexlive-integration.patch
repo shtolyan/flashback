@@ -1,0 +1,181 @@
+diff --git a/.agents/skills/hexlive-bug-tracker/SKILL.md b/.agents/skills/hexlive-bug-tracker/SKILL.md
+index f54a5563f..0f4b87863 100644
+--- a/.agents/skills/hexlive-bug-tracker/SKILL.md
++++ b/.agents/skills/hexlive-bug-tracker/SKILL.md
+@@ -5,23 +5,20 @@ description: Read and mutate HexLive bug reports in the central server tracker,
+ 
+ # HexLive server bug tracker
+ 
+-The source of truth is `https://163-245-204-96.sslip.io/api/bugs/v1`.
++The source of truth is `https://flashback.62-146-235-120.sslip.io/api/bugs/v1`.
+ Use `scripts/bugs.py`; it preserves JSON encoding and surfaces HTTP conflicts.
+ 
+-## Authentication
++## Connection and compatibility
+ 
+-Mutations require the bug-only agent Bearer token. By the project owner's
+-explicit decision, the portable token is tracked as `bug-token` beside this
+-file in the private repository so every repository checkout can operate the
+-tracker. `scripts/bugs.py` checks `HEXLIVE_BUG_TOKEN`, an explicit
+-`--token-file`, the repository token, then `~/.config/hexlive/bug-token`.
+-On the server the matching token is `/var/lib/hexlive/hexlive-bugs-token.txt`.
+-Never print it, paste it into chat/logs, or reuse it for SSH, player control, or
+-admin access. If repository visibility ever stops being private, rotate this
+-token immediately.
++Production storage is Flashback PostgreSQL in Singapore. The previous
++`https://163-245-204-96.sslip.io/api/bugs/v1` address proxies to the same API,
++so already running agents and game clients remain compatible. The retired
++SQLite database is a backup, not the source of current reports.
+ 
+-Reads and new player reports are public. Status changes, agent fields,
+-comments authored by an agent, and deletion are authenticated.
++The current instance requires no authentication, as requested by its owner.
++Existing Bearer headers are accepted and ignored by Flashback. The CLI retains
++its token lookup for compatibility with other instances. Never print existing
++token files or reuse them for SSH, player control or admin access.
+ 
+ ## Workflow
+ 
+diff --git a/.agents/skills/hexlive-bug-tracker/scripts/bugs.py b/.agents/skills/hexlive-bug-tracker/scripts/bugs.py
+index 0cab15c92..99a268540 100644
+--- a/.agents/skills/hexlive-bug-tracker/scripts/bugs.py
++++ b/.agents/skills/hexlive-bug-tracker/scripts/bugs.py
+@@ -2,7 +2,7 @@
+ """Small stdlib client for the HexLive bug API. Never logs the bearer token."""
+ import argparse, json, os, pathlib, subprocess, sys, urllib.error, urllib.request
+ 
+-DEFAULT="https://163-245-204-96.sslip.io/api/bugs/v1"
++DEFAULT="https://flashback.62-146-235-120.sslip.io/api/bugs/v1"
+ REPOSITORY_TOKEN=pathlib.Path(__file__).resolve().parents[1]/"bug-token"
+ USER_TOKEN=pathlib.Path("~/.config/hexlive/bug-token").expanduser()
+ 
+diff --git a/AGENTS.md b/AGENTS.md
+index 3ab655e4b..2cc6f74de 100644
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -83,7 +83,9 @@ python3 Tools/unity_mcp_lease.py acquire --agent <stable-agent-task-name> --task
+ 
+ At the start of every bug-fixing session, and whenever the user asks to inspect
+ or fix bugs, use `.agents/skills/hexlive-bug-tracker/SKILL.md`. The source of
+-truth is the production server SQLite database exposed at `/api/bugs/v1`.
++truth is Flashback PostgreSQL in Singapore, exposed at
++`https://flashback.62-146-235-120.sslip.io/api/bugs/v1`. The old production
++`/api/bugs/v1` route proxies to this same API; the SQLite copy is retired.
+ 
+ - The work queue is every report whose `status` is `"created"` or `"rework"`.
+   Before beginning work on one, immediately set its status to `"in_progress"`
+@@ -109,7 +111,8 @@ truth is the production server SQLite database exposed at `/api/bugs/v1`.
+   `ready_for_test → rework → in_progress` for a failed test. `archived` is a
+   separate history flag for a confirmed `fixed` report, not deletion.
+ - Do not edit `BUGS.json` for report work. It is a retired one-shot migration
+-  source. The game and agents read and mutate reports through authenticated
+-  HTTP; the web admin uses the same database.
++  source. The game and agents read and mutate reports through the same HTTP API;
++  this Flashback instance requires no authentication. The web UI uses the
++  same PostgreSQL database.
+ - `BUGS.json` remains only the coordination file for the Unity MCP lease below.
+   Never add reports back to it or treat its stale `reports` array as a queue.
+diff --git a/Server/Caddyfile b/Server/Caddyfile
+index 6decee42b..dac2a82d1 100644
+--- a/Server/Caddyfile
++++ b/Server/Caddyfile
+@@ -1,4 +1,19 @@
+ 163-245-204-96.sslip.io {
+ 	encode zstd gzip
+-	reverse_proxy 127.0.0.1:5123
++	route {
++		@bugs path /api/bugs/v1 /api/bugs/v1/*
++		reverse_proxy @bugs https://flashback.62-146-235-120.sslip.io {
++			header_up Host flashback.62-146-235-120.sslip.io
++		}
++		@oldBugForms {
++			path /admin/bugs /admin/bugs/*
++			not method GET HEAD
++		}
++		respond @oldBugForms "Bug tracker moved to https://flashback.62-146-235-120.sslip.io. Reload the page before saving." 409
++		@bugCard path_regexp bugCard ^/admin/bugs/([0-9]+)/?$
++		redir @bugCard https://flashback.62-146-235-120.sslip.io/?bug={re.bugCard.1} 302
++		@bugAdmin path /admin/bugs /admin/bugs/*
++		redir @bugAdmin https://flashback.62-146-235-120.sslip.io/ 302
++		reverse_proxy 127.0.0.1:5123
++	}
+ }
+diff --git a/Spec/114.md b/Spec/114.md
+index 9cfd135de..81c7b1e9d 100644
+--- a/Spec/114.md
++++ b/Spec/114.md
+@@ -1,5 +1,19 @@
+ ## §114 Баг-трекер в игре (iteration 114)
+ 
++**Production migration — 2026-09-10.** Текущее единое хранилище — PostgreSQL
++самостоятельного Flashback в Сингапуре. UI:
++`https://flashback.62-146-235-120.sslip.io`; API: тот же origin + `/api/bugs/v1`.
++Старый production `/api/bugs/v1` прозрачно проксируется туда, поэтому уже
++собранная игра продолжает использовать выбранный игровой endpoint; аргумент
++`-hexlive-bugs-api` по-прежнему переопределяет его. Агенты и build scripts
++по умолчанию используют прямой новый URL. Авторизации в этом экземпляре нет;
++прежние Bearer-заголовки совместимы. `/admin/bugs` и ссылки на карточки
++перенаправляются в Flashback; старые POST-формы получают 409 с указанием
++перезагрузить страницу. Сохранённая SQLite — архив перед переключением,
++не действующее хранилище. Ниже описан исторический встроенный трекер;
++HTTP-поля, статусы, ревизии, комментарии и семантика операций сохранены.
++
++
+ Микро-джира между игроком и агентом, не выходя из Play: кнопка **Bug tracker**
+ в левой дебаг-панели открывает окно, где игрок текстом описывает баг и жмёт
+ «Отправить». Единое хранилище — SQLite `hexlive-bugs.sqlite3` рядом с серверным
+diff --git a/Tools/build_release.py b/Tools/build_release.py
+index c959ffd0c..e6058a87c 100755
+--- a/Tools/build_release.py
++++ b/Tools/build_release.py
+@@ -24,7 +24,7 @@ DEFAULT_DISTRIBUTION = Path.home() / "hex-girls"
+ DEFAULT_RELEASES = DEFAULT_DISTRIBUTION / "Releases"
+ PROJECT_SETTINGS = ROOT / "ProjectSettings" / "ProjectSettings.asset"
+ PENDING_VERSION = ROOT / "Library" / "HexLivePendingBuildVersion.txt"
+-BUG_API = os.environ.get("HEXLIVE_BUG_API", "https://163-245-204-96.sslip.io/api/bugs/v1").rstrip("/")
++BUG_API = os.environ.get("HEXLIVE_BUG_API", "https://flashback.62-146-235-120.sslip.io/api/bugs/v1").rstrip("/")
+ UNITY_LOCK = ROOT / "Temp" / "UnityLockfile"
+ UNITY_METHOD = "HexLive.UnityDebug.Editor.HexLiveReleaseBuilder.BuildMacOS"
+ UNITY_PREFS_DOMAIN = "com.unity3d.UnityEditor5.x"
+diff --git a/Tools/build_release_windows.py b/Tools/build_release_windows.py
+index 8921082d2..bd0826490 100644
+--- a/Tools/build_release_windows.py
++++ b/Tools/build_release_windows.py
+@@ -46,7 +46,7 @@ DEFAULT_DISTRIBUTION = Path.home() / "hex-girls"
+ DEFAULT_RELEASES = DEFAULT_DISTRIBUTION / "Releases"
+ PROJECT_SETTINGS = ROOT / "ProjectSettings" / "ProjectSettings.asset"
+ PENDING_VERSION = ROOT / "Library" / "HexLivePendingBuildVersion.txt"
+-BUG_API = os.environ.get("HEXLIVE_BUG_API", "https://163-245-204-96.sslip.io/api/bugs/v1").rstrip("/")
++BUG_API = os.environ.get("HEXLIVE_BUG_API", "https://flashback.62-146-235-120.sslip.io/api/bugs/v1").rstrip("/")
+ REPOSITORY_BUG_TOKEN = ROOT / ".agents" / "skills" / "hexlive-bug-tracker" / "bug-token"
+ USER_BUG_TOKEN = Path.home() / ".config" / "hexlive" / "bug-token"
+ UNITY_LOCK = ROOT / "Temp" / "UnityLockfile"
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -49,7 +49,10 @@
+ 
+ ## ⭐ Server bug tracker (spec §114)
+ 
+-The player files bugs from inside the game into the central server SQLite store.
++The player files bugs into Flashback PostgreSQL in Singapore:
++`https://flashback.62-146-235-120.sslip.io/api/bugs/v1`. The previous production
++API address proxies to it, so installed games and running agents keep working.
++The old SQLite store is retired; Flashback currently requires no authentication.
+ When the user says «разбери баги» / «посмотри баг-трекер», use the project skill
+ `.agents/skills/hexlive-bug-tracker/SKILL.md`; do not read the retired reports
+ array in `BUGS.json`.
+@@ -77,11 +80,12 @@
+   history flag for a confirmed fix. Permanent deletion is an explicit player
+   or administrator action, never part of the agent workflow.
+ - The game polls `/api/bugs/v1/reports` and sends mutations to the same API;
+-  the web admin at `/admin/bugs` is another surface over the same rows.
++  the old `/admin/bugs` redirects to the Flashback web UI over the same rows.
+ - `BUGS.json` is retained only for the Unity MCP lease. Its historical reports
+   are imported into SQLite once and must not be edited or reintroduced.
+ 
+-Code: `Server/HexLive.Server/Bugs/` (SQLite + API + admin),
++Tracker: `https://github.com/shtolyan/flashback` (PostgreSQL + compatible API + UI).
++Legacy code: `Server/HexLive.Server/Bugs/` (retired SQLite API/admin),
+ `UnityPresentation/UI/BugReportStore.cs` (HTTP client),
+ `UI/BugReportPanel.cs` (window), button in `DebugControlsPanel`.
+ Основной текст существующего отчёта игрок может отредактировать из карточки;
