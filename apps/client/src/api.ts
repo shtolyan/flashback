@@ -67,7 +67,7 @@ export function useLive() {
     const refresh = () =>
       client.invalidateQueries({
         predicate: (q) =>
-          ["list", "report", "commit"].includes(String(q.queryKey[0])),
+          ["list", "report", "report-access", "commit"].includes(String(q.queryKey[0])),
       });
     async function connect() {
       if (stopped) return;
