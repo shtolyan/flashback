@@ -17,7 +17,7 @@ export default function HTML({ children }: PropsWithChildren) {
         />
         <link rel="manifest" href="/manifest.json" />
         <link rel="apple-touch-icon" href="/icon-192.png" />
-        <link rel="stylesheet" href="/app.css?v=4" />
+        <link rel="stylesheet" href="/app.css?v=5" />
         <title>Flashback</title>
         <ScrollViewStyleReset />
       </head>

@@ -6,12 +6,17 @@ export type OverlayProps = React.PropsWithChildren<{
   onClose: () => void;
   label: string;
   center?: boolean;
+  backgroundColor?: string;
 }>;
-export default function Overlay({ children, onClose }: OverlayProps) {
+export default function Overlay({
+  children,
+  onClose,
+  backgroundColor = c.surface,
+}: OverlayProps) {
   return (
     <Modal visible animationType="slide" onRequestClose={onClose}>
       <SafeAreaProvider>
-        <SafeAreaView style={{ flex: 1, backgroundColor: c.surface }}>
+        <SafeAreaView style={{ flex: 1, backgroundColor }}>
           <KeyboardAvoidingView
             behavior={Platform.OS === "ios" ? "padding" : undefined}
             style={{ flex: 1 }}

@@ -884,7 +884,11 @@ export default function Tracker() {
           </View>
         </View>
         {mobile && menu && (
-          <Overlay label="Навигация" onClose={() => setMenu(false)}>
+          <Overlay
+            label="Навигация"
+            backgroundColor={c.sidebar}
+            onClose={() => setMenu(false)}
+          >
             <ScrollView
               style={{ flex: 1 }}
               contentContainerStyle={{ flexGrow: 1 }}
