@@ -9,16 +9,48 @@ export const accessEvents = new EventEmitter();
 export const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 export const randomSecret = () => "fb_" + randomBytes(32).toString("base64url");
 const projection = `id,name,is_admin AS "isAdmin",allowed_statuses AS "allowedStatuses",created_at AS "createdAt",revoked_at AS "revokedAt",last_used_at AS "lastUsedAt"`;
+// Central credentials stay only in process memory; browser sessions require a new login after restart.
+const centralSecrets = new Map<string, string>();
+const centralPermissions = new WeakMap<AccessKey, string[]>();
+async function central(secret: string): Promise<AccessKey> {
+  const root = process.env.HEXLIVE_IDENTITY_URL;
+  if (!root || new URL(root).protocol !== "https:") throw new ApiError(503, "Центральный доступ не настроен.");
+  let response: Response;
+  try { response = await fetch(new URL("/api/identity/v1/validate", root), { method: "POST", headers: { Authorization: `Bearer ${secret}` }, redirect: "error", signal: AbortSignal.timeout(5000) }); }
+  catch { throw new ApiError(503, "Сервис доступа недоступен."); }
+  if (response.status === 401) throw new ApiError(401, "Ключ отозван.");
+  if (!response.ok) throw new ApiError(503, "Сервис доступа недоступен.");
+  const subject = await response.json() as { accountId: string; name: string; permissions: string[]; subjectType: string };
+  if (!/^[a-f0-9]{32}$/.test(subject.accountId) || !Array.isArray(subject.permissions)) throw new ApiError(503, "Некорректный ответ сервиса доступа.");
+  const digest = hash(secret);
+  const id = `${digest.slice(0,8)}-${digest.slice(8,12)}-${digest.slice(12,16)}-${digest.slice(16,20)}-${digest.slice(20,32)}`;
+  const allowed = subject.permissions.includes("bugs.manage") ? statuses.filter(s => subject.subjectType !== "agent" || s !== "fixed") : subject.permissions.includes("bugs.create") ? ["created" as Status] : [];
+  const key = { id, name: subject.name, isAdmin: false, allowedStatuses: [...allowed], createdAt: new Date().toISOString(), revokedAt: null, lastUsedAt: null, accountId: subject.accountId } as AccessKey;
+  centralPermissions.set(key, subject.permissions);
+  centralSecrets.set(id, secret);
+  return key;
+}
+export function requireCentralPermission(key: AccessKey, permission: string) {
+  const rights = centralPermissions.get(key);
+  if (rights && !rights.includes(permission)) throw new ApiError(403, `Нет права ${permission}.`);
+}
+export function isCentral(key: AccessKey) { return centralPermissions.has(key); }
 export async function getKey(
   id: string,
   db: Pick<PoolClient, "query"> = pool,
   lock = false,
 ): Promise<AccessKey> {
   const r = await db.query(
-    `SELECT ${projection} FROM access_tokens WHERE id=$1 AND revoked_at IS NULL ${lock ? "FOR SHARE" : ""}`,
+    `SELECT ${projection},secret_hash FROM access_tokens WHERE id=$1 AND revoked_at IS NULL ${lock ? "FOR SHARE" : ""}`,
     [id],
   );
   if (!r.rowCount) throw new ApiError(401, "Ключ отозван. Войдите снова.");
+  if (String(r.rows[0].secret_hash).startsWith("central:")) {
+    const secret = centralSecrets.get(id);
+    if (!secret) throw new ApiError(401, "Введите ключ заново.");
+    return central(secret);
+  }
+  delete r.rows[0].secret_hash;
   return r.rows[0];
 }
 export function allowStatus(key: AccessKey, status: Status) {
@@ -32,8 +64,10 @@ export async function writeKey(
   db: PoolClient,
   key: AccessKey,
   status?: Status,
+  permission = "bugs.manage",
 ) {
   const fresh = await getKey(key.id, db, true);
+  requireCentralPermission(fresh, permission);
   if (status) allowStatus(fresh, status);
   return fresh;
 }
@@ -125,6 +159,11 @@ export async function revokeKey(id: string, actor: AccessKey) {
   accessEvents.emit("revoke", id);
 }
 export async function authenticate(secret: string): Promise<AccessKey> {
+  if (secret.startsWith("hexlive_")) {
+    const key = await central(secret);
+    await pool.query(`INSERT INTO access_tokens(id,name,secret_hash,is_admin,allowed_statuses,central_account_id) VALUES($1,$2,$3,false,$4,$5) ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name,allowed_statuses=EXCLUDED.allowed_statuses`, [key.id, key.name, "central:" + hash(secret), key.allowedStatuses, (key as AccessKey & { accountId: string }).accountId]);
+    return key;
+  }
   if (!secret || secret.length > 4096)
     throw new ApiError(401, "Введите действующий ключ доступа.");
   const r = await pool.query(

@@ -72,6 +72,17 @@ export async function authRoutes(app: FastifyInstance) {
       (request as AuthRequest).sessionHash = access.hash(secret);
     }
   });
+  app.addHook("preHandler", async (request) => {
+    const key = actor(request);
+    if (!key || !access.isCentral(key)) return;
+    const url = request.url.split("?")[0];
+    if (url.startsWith("/api/access-keys")) throw new ApiError(403, "Управление ключами: https://keys.62-146-235-120.sslip.io/");
+    if (url.startsWith("/api/bugs/v1")) {
+      const permission = request.method === "GET" || request.method === "HEAD" ? "bugs.read" : request.method === "POST" && url === "/api/bugs/v1/reports" ? "bugs.create" : "bugs.manage";
+      access.requireCentralPermission(key, permission);
+    }
+    if (url === "/api/auth/socket-ticket") access.requireCentralPermission(key, "bugs.read");
+  });
   app.post("/api/auth/session", async (request, reply) => {
     const t = Date.now();
     for (const [id, x] of attempts) if (x.until < t) attempts.delete(id);

@@ -17,7 +17,7 @@ import { pool } from "./database.ts";
 import { root, settings } from "./config.ts";
 import { openapi } from "./openapi.ts";
 import { authRoutes, actor, type AuthRequest } from "./auth-http.ts";
-import { accessEvents, getKey, reportAccess } from "./access.ts";
+import { accessEvents, getKey, reportAccess, requireCentralPermission } from "./access.ts";
 
 export async function buildApp() {
   const app = Fastify({ logger: false, bodyLimit: 8 * 1024 * 1024 });
@@ -167,7 +167,7 @@ export async function buildApp() {
     });
     const timer = setInterval(async () => {
       try {
-        await getKey(key.id);
+        requireCentralPermission(await getKey(key.id), "bugs.read");
         if (
           session &&
           !(

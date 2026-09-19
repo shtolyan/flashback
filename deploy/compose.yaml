@@ -24,6 +24,7 @@ services:
       PORT: 4310
       COOKIE_SECURE: "true"
       PUBLIC_ORIGIN: https://flashback.62-146-235-120.sslip.io
+      HEXLIVE_IDENTITY_URL: ${HEXLIVE_IDENTITY_URL:-}
       INSTANCE_NAME: HexLive
       REPOSITORY_URL: https://github.com/simple-diple/HexLive
     ports:

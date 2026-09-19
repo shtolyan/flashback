@@ -26,6 +26,7 @@ services:
       PUBLIC_ORIGIN: ${PUBLIC_ORIGIN:-}
       INSTANCE_NAME: ${INSTANCE_NAME:-Flashback}
       REPOSITORY_URL: ${REPOSITORY_URL:-}
+      HEXLIVE_IDENTITY_URL: ${HEXLIVE_IDENTITY_URL:-}
     ports:
       - "${PORT:-4310}:4310"
     depends_on:

@@ -577,3 +577,41 @@ test("socket tickets are one-time and unauthenticated upgrades fail", async () =
     401,
   );
 });
+
+test("central key permissions are independent, mutable and rechecked in browser sessions", async () => {
+  const originalFetch = globalThis.fetch;
+  const oldAuthority = process.env.HEXLIVE_IDENTITY_URL;
+  process.env.HEXLIVE_IDENTITY_URL = "https://identity.example";
+  let permissions = ["bugs.create"];
+  let revoked = false;
+  let subjectType = "player";
+  const secret = "hexlive_" + "a".repeat(64);
+  globalThis.fetch = async () => revoked ? new Response("", { status: 401 }) : Response.json({ accountId: "a".repeat(32), name: "Central tester", permissions, subjectType });
+  const call = (method: any, url: string, payload?: any) => app.inject({ method, url, payload, headers: { authorization: "Bearer " + secret } });
+  try {
+    assert.equal((await call("GET", base + "/reports")).statusCode, 403);
+    const created = await call("POST", base + "/reports", { text: "Central permissions fixture" });
+    assert.equal(created.statusCode, 201);
+    const id = created.json().id;
+    assert.equal((await call("POST", base + `/reports/${id}`, { text: "denied" })).statusCode, 403);
+    permissions = ["bugs.read"];
+    assert.equal((await call("GET", base + "/reports")).statusCode, 200);
+    assert.equal((await call("POST", base + "/reports", { text: "denied" })).statusCode, 403);
+    const login = await app.inject({ method: "POST", url: "/api/auth/session", payload: { token: secret } });
+    assert.equal(login.statusCode, 200);
+    const sessionCookie = String(login.headers["set-cookie"]).split(";")[0];
+    permissions = [];
+    assert.equal((await app.inject({ method: "GET", url: base + "/reports", headers: { cookie: sessionCookie } })).statusCode, 403);
+    permissions = ["bugs.read", "bugs.manage", "keys.manage"];
+    assert.equal((await call("POST", base + `/reports/${id}`, { text: "allowed" })).statusCode, 200);
+    assert.equal((await call("POST", "/api/access-keys", { name: "escalation", isAdmin: true })).statusCode, 403);
+    subjectType = "agent";
+    assert.equal((await call("POST", base + `/reports/${id}`, { status: "fixed" })).statusCode, 403);
+    revoked = true;
+    assert.equal((await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: sessionCookie } })).statusCode, 401);
+    assert.equal((await call("GET", base + "/reports")).statusCode, 401);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (oldAuthority === undefined) delete process.env.HEXLIVE_IDENTITY_URL; else process.env.HEXLIVE_IDENTITY_URL = oldAuthority;
+  }
+});

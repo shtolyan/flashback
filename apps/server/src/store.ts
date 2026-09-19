@@ -110,7 +110,7 @@ export async function createReport(
   actor: AccessKey,
 ) {
   const report = await transaction(async (db) => {
-    const key = await writeKey(db, actor, "created");
+    const key = await writeKey(db, actor, "created", "bugs.create");
     const { rows } = await db.query(
       'INSERT INTO reports("createdUtc",status,text,context,"reportedInVersion") VALUES($1,\'created\',$2,$3,$4) RETURNING id',
       [

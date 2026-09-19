@@ -51,6 +51,8 @@ const migrations = [
    CREATE INDEX report_access_report ON report_access(report_id,id DESC);
    CREATE TABLE patch_access (sha TEXT PRIMARY KEY REFERENCES commit_patches(sha) ON DELETE CASCADE,
     token_id UUID NOT NULL REFERENCES access_tokens(id), token_name TEXT NOT NULL, at TIMESTAMPTZ NOT NULL DEFAULT now());`,
+  `ALTER TABLE access_tokens ADD COLUMN central_account_id UUID;
+   CREATE INDEX access_tokens_central_account ON access_tokens(central_account_id);`,
 ];
 
 export async function migrate() {
