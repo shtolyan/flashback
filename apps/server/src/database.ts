@@ -53,6 +53,20 @@ const migrations = [
     token_id UUID NOT NULL REFERENCES access_tokens(id), token_name TEXT NOT NULL, at TIMESTAMPTZ NOT NULL DEFAULT now());`,
   `ALTER TABLE access_tokens ADD COLUMN central_account_id UUID;
    CREATE INDEX access_tokens_central_account ON access_tokens(central_account_id);`,
+  `CREATE TABLE projects (slug TEXT PRIMARY KEY, name TEXT NOT NULL, repository TEXT NOT NULL DEFAULT '');
+   INSERT INTO projects VALUES ('hexlive','HexLive','https://github.com/simple-diple/HexLive'),('first-signal','First Signal','https://github.com/shtolyan/first-signal');
+   ALTER TABLE reports ADD COLUMN project TEXT NOT NULL DEFAULT 'hexlive' REFERENCES projects(slug);
+   CREATE INDEX reports_project_status ON reports(project,archived,status,id DESC);
+   ALTER TABLE access_tokens ADD COLUMN reporter_project TEXT REFERENCES projects(slug);
+   CREATE TABLE report_attachments (id UUID PRIMARY KEY, report_id INTEGER NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+     filename TEXT NOT NULL, content_type TEXT NOT NULL, bytes BYTEA NOT NULL, sha256 TEXT NOT NULL,
+     created_at TIMESTAMPTZ NOT NULL DEFAULT now(), token_id UUID NOT NULL REFERENCES access_tokens(id));
+   CREATE INDEX report_attachments_report ON report_attachments(report_id,created_at);
+   CREATE TABLE report_submissions (token_id UUID NOT NULL REFERENCES access_tokens(id), request_id UUID NOT NULL,
+     report_id INTEGER NOT NULL REFERENCES reports(id) ON DELETE CASCADE, PRIMARY KEY(token_id,request_id));
+   CREATE TABLE voice_transcriptions (id UUID PRIMARY KEY, token_id UUID NOT NULL REFERENCES access_tokens(id),
+     project TEXT NOT NULL REFERENCES projects(slug), status TEXT NOT NULL DEFAULT 'queued', audio BYTEA,
+     text TEXT NOT NULL DEFAULT '', error TEXT NOT NULL DEFAULT '', created_at TIMESTAMPTZ NOT NULL DEFAULT now());`,
 ];
 
 export async function migrate() {

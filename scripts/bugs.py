@@ -1,31 +1,26 @@
 #!/usr/bin/env python3
 """Small stdlib client for the HexLive bug API. Never logs the bearer token."""
-import argparse, json, os, pathlib, subprocess, sys, urllib.error, urllib.request
+import argparse, hashlib, json, os, pathlib, subprocess, sys, urllib.error, urllib.request, urllib.parse
 
-DEFAULT=os.environ.get("FLASHBACK_API", "http://localhost:4310/api/bugs/v1")
+DEFAULT=os.environ.get("FLASHBACK_API", "https://flashback.62-146-235-120.sslip.io/api/bugs/v1")
 REPOSITORY_TOKEN=pathlib.Path(__file__).resolve().parents[1]/"bug-token"
 USER_TOKEN=pathlib.Path("~/.config/hexlive/bug-token").expanduser()
 
 def token(args):
-    value=os.environ.get("HEXLIVE_BUG_TOKEN","").strip()
-    paths=[]
-    if args.token_file: paths.append(pathlib.Path(args.token_file).expanduser())
-    paths.extend((REPOSITORY_TOKEN,USER_TOKEN))
-    for path in paths:
-        if value or not path.is_file(): continue
-        if path == REPOSITORY_TOKEN and os.name != "nt":
-            try: path.chmod(0o600)
-            except OSError: pass
-        value=path.read_text(encoding="utf-8").strip()
+    path=pathlib.Path(args.token_file).expanduser() if args.token_file else USER_TOKEN
+    try: value=path.read_text(encoding="utf-8").strip()
+    except OSError as e: raise SystemExit(f"Cannot read device-local token file: {path}") from e
+    if not value: raise SystemExit(f"Device-local token file is empty: {path}")
     return value
 
 def call(args,method,path,payload=None,auth=False):
     data=None if payload is None else json.dumps(payload,ensure_ascii=False).encode()
-    headers={"Accept":"application/json"}
+    headers={"Accept":"application/json","X-Flashback-Project":args.project}
     if data is not None: headers["Content-Type"]="application/json"
     value=token(args)
     if value: headers["Authorization"]="Bearer "+value
-    request=urllib.request.Request(args.api.rstrip("/")+path,data=data,headers=headers,method=method)
+    url=urllib.parse.urljoin(args.api.rstrip("/")+"/",path) if path.startswith("/api/") else args.api.rstrip("/")+path
+    request=urllib.request.Request(url,data=data,headers=headers,method=method)
     try:
         with urllib.request.urlopen(request,timeout=15) as response:
             body=response.read().decode()
@@ -84,9 +79,13 @@ def backfill(args,repo):
     return {"stored":len(stored),"pushed":len(pushed),"unknown":unknown}
 
 def main():
-    p=argparse.ArgumentParser(); p.add_argument("--api",default=DEFAULT); p.add_argument("--token-file")
+    p=argparse.ArgumentParser(); p.add_argument("--api",default=DEFAULT); p.add_argument("--token-file"); p.add_argument("--project",default=os.environ.get("FLASHBACK_PROJECT","hexlive"))
     sub=p.add_subparsers(dest="cmd",required=True)
-    sub.add_parser("list"); sub.add_parser("queue")
+    sub.add_parser("list"); sub.add_parser("queue"); sub.add_parser("whoami")
+    images=sub.add_parser("attachments",help="download and SHA-256 verify screenshot attachments")
+    images.add_argument("id",type=int);images.add_argument("--output",required=True)
+    upload=sub.add_parser("attach",help="attach PNG or JPEG to a freshly read report")
+    upload.add_argument("id",type=int);upload.add_argument("file")
     g=sub.add_parser("get"); g.add_argument("id",type=int)
     c=sub.add_parser("create"); c.add_argument("--text",required=True); c.add_argument("--context",default=""); c.add_argument("--version",default="")
     u=sub.add_parser("update"); u.add_argument("id",type=int); u.add_argument("--status"); u.add_argument("--text"); u.add_argument("--assigned-agent"); u.add_argument("--handoff"); u.add_argument("--fix-commits",nargs="*"); u.add_argument("--expected-revision",type=int); u.add_argument("--archived",choices=("true","false")); u.add_argument("--repo",default=".",help="checkout to read --fix-commits patches from"); u.add_argument("--no-patch",action="store_true",help="do not upload the patches of --fix-commits")
@@ -95,7 +94,29 @@ def main():
     m=sub.add_parser("comment"); m.add_argument("id",type=int); m.add_argument("--author",default="codex"); m.add_argument("--text",required=True)
     d=sub.add_parser("delete"); d.add_argument("id",type=int)
     a=p.parse_args()
-    if a.cmd in ("list","queue"):
+    if a.cmd=="whoami":
+        data=call(a,"GET","/api/auth/me");data["tokenFile"]=str(pathlib.Path(a.token_file).expanduser() if a.token_file else USER_TOKEN)
+    elif a.cmd=="attachments":
+        report=call(a,"GET",f"/reports/{a.id}");out=pathlib.Path(a.output);out.mkdir(parents=True,exist_ok=True);data=[]
+        for image in report.get("attachments",[]):
+            url=urllib.parse.urljoin(a.api,image["url"])
+            if urllib.parse.urlsplit(url).netloc!=urllib.parse.urlsplit(a.api).netloc:raise SystemExit("Refusing attachment from another origin")
+            req=urllib.request.Request(url,headers={"Authorization":"Bearer "+token(a),"X-Flashback-Project":a.project})
+            with urllib.request.urlopen(req,timeout=60) as response:body=response.read(4*1024*1024+1)
+            if hashlib.sha256(body).hexdigest()!=image["sha256"]:raise SystemExit("Attachment hash mismatch")
+            name=image["id"]+"-"+pathlib.Path(image["filename"]).name
+            target=out/name;target.write_bytes(body);data.append({"id":image["id"],"path":str(target.resolve()),"sha256":image["sha256"]})
+    elif a.cmd=="attach":
+        report=call(a,"GET",f"/reports/{a.id}");file=pathlib.Path(a.file);body=file.read_bytes()
+        if len(body)>4*1024*1024:raise SystemExit("Image exceeds 4 MiB")
+        content="image/png" if body.startswith(b"\x89PNG\r\n\x1a\n") else "image/jpeg" if body.startswith(b"\xff\xd8") else None
+        if content is None:raise SystemExit("PNG or JPEG required")
+        url=a.api.rstrip("/")+f"/reports/{a.id}/attachments?filename="+urllib.parse.quote(file.name)+"&expectedRevision="+str(report["revision"])
+        req=urllib.request.Request(url,data=body,method="POST",headers={"Authorization":"Bearer "+token(a),"X-Flashback-Project":a.project,"Content-Type":content})
+        try:
+            with urllib.request.urlopen(req,timeout=60) as response:data=json.load(response)
+        except urllib.error.HTTPError as e:raise SystemExit(f"HTTP {e.code}: "+e.read().decode(errors="replace"))
+    elif a.cmd in ("list","queue"):
         data=call(a,"GET","/reports")
         if a.cmd=="queue": data=[r for r in data if r.get("status") in ("created","rework")]
     elif a.cmd=="get": data=call(a,"GET",f"/reports/{a.id}")

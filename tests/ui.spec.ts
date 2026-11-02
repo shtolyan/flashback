@@ -310,3 +310,70 @@ test("access-key UI, persistent login, restricted statuses and remote revocation
     if (reportId) await request.delete(api + "/reports/" + reportId);
   }
 });
+
+test("First Signal project, private screenshot preview and attachment upload", async ({
+  page,
+  request,
+}) => {
+  const image = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a1ioAAAAASUVORK5CYII=",
+    "base64",
+  );
+  const created = await request.post(api + "/reports", {
+    headers: { "X-Flashback-Project": "first-signal" },
+    data: {
+      text: "Screenshot browser fixture",
+      attachments: [
+        {
+          filename: "scene.png",
+          contentType: "image/png",
+          dataBase64: image.toString("base64"),
+        },
+      ],
+    },
+  });
+  expect(created.ok()).toBeTruthy();
+  const r = await created.json();
+  try {
+    await page.goto("/?project=first-signal&bug=" + r.id);
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Открыть scene.png" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Открыть scene.png" }).click();
+    await expect(
+      page.getByRole("dialog", { name: "Скриншот бага" }),
+    ).toBeVisible();
+    await page.screenshot({
+      path: "test-results/first-signal-screenshot-preview.png",
+    });
+    await page.getByRole("button", { name: "Закрыть", exact: true }).click();
+    const chooser = page.waitForEvent("filechooser");
+    await page
+      .getByRole("button", { name: "Прикрепить скриншот", exact: true })
+      .click();
+    await (
+      await chooser
+    ).setFiles({ name: "another.png", mimeType: "image/png", buffer: image });
+    await expect(
+      page.getByRole("button", { name: "Открыть another.png" }),
+    ).toBeVisible();
+    const detail = await request.get(api + "/reports/" + r.id, {
+      headers: { "X-Flashback-Project": "first-signal" },
+    });
+    expect((await detail.json()).attachments).toHaveLength(2);
+    await page.goto("/?project=hexlive");
+    await expect(page.getByTestId("bug-" + r.id)).toHaveCount(0);
+    await page
+      .getByRole("button", { name: "First Signal", exact: true })
+      .first()
+      .click();
+    await expect(page).toHaveURL(/project=first-signal/);
+    await expect(page.getByTestId("bug-" + r.id)).toBeVisible();
+    await page.screenshot({ path: "test-results/first-signal-project.png" });
+  } finally {
+    await request.delete(api + "/reports/" + r.id, {
+      headers: { "X-Flashback-Project": "first-signal" },
+    });
+  }
+});

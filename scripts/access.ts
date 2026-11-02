@@ -13,7 +13,11 @@ try {
   await migrate();
   if (command === "list")
     console.log(JSON.stringify(await listKeys(), null, 2));
-  else if (command === "bootstrap" || command === "import") {
+  else if (
+    command === "bootstrap" ||
+    command === "import" ||
+    command === "reporter"
+  ) {
     const name =
       option("name") ?? (command === "bootstrap" ? "Администратор" : "HexLive");
     const admin = command === "bootstrap";
@@ -22,7 +26,9 @@ try {
     if (admin && !output) throw new Error("--output is required");
     if (admin && (await listKeys()).some((k) => k.isAdmin && !k.revokedAt))
       throw new Error("Administrator already exists; use the access-key UI.");
-    if (!admin && !input) throw new Error("--file is required");
+    if (command === "import" && !input) throw new Error("--file is required");
+    if (command === "reporter" && (!output || !option("project")))
+      throw new Error("reporter requires --project and --output");
     const secret = input ? (await readFile(input, "utf8")).trim() : undefined;
     const supplied = option("statuses");
     const allowed = supplied
@@ -49,7 +55,13 @@ try {
         await writeFile(output, "", { flag: "wx", mode: 0o600 });
       }
       const result = await createKey(
-        { name, isAdmin: admin, allowedStatuses: allowed as any },
+        {
+          name,
+          isAdmin: admin,
+          allowedStatuses: allowed as any,
+          reporterProject:
+            command === "reporter" ? option("project") : undefined,
+        },
         undefined,
         secret,
       );

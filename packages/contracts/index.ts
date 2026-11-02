@@ -19,6 +19,8 @@ export interface Comment {
   text: string;
 }
 export interface Report {
+  project?: string;
+  attachments?: Attachment[];
   id: number;
   createdUtc: string;
   status: Status;
@@ -67,6 +69,7 @@ export type ChangeEvent =
 export type { Update } from "./schemas";
 
 export interface AccessKey {
+  reporterProject?: string | null;
   id: string;
   name: string;
   isAdmin: boolean;
@@ -74,6 +77,15 @@ export interface AccessKey {
   createdAt: string;
   revokedAt: string | null;
   lastUsedAt: string | null;
+}
+export interface Attachment {
+  id: string;
+  filename: string;
+  contentType: string;
+  size: number;
+  sha256: string;
+  createdAt: string;
+  url: string;
 }
 export interface AccessStamp {
   tokenId: string;

@@ -59,7 +59,7 @@ WebSocket `/events`:
 4. После реализации поставить `ready_for_test` и описать результат проверки в комментарии и handoff.
 5. Только игрок подтверждает `fixed`, возвращает `rework` и архивирует. Сервер проверяет разрешённые ключу целевые статусы.
 
-Прежний Python-клиент принимает `--api <новый-base-url>`. Поставляемый `scripts/bugs.py` также читает `FLASHBACK_API`, по умолчанию работает с localhost:4310 и принимает ключ через `HEXLIVE_BUG_TOKEN` или `--token-file`. В HexLive параметр игры — `-hexlive-bugs-api <новый-base-url>`.
+Прежний Python-клиент принимает `--api <новый-base-url>`. Поставляемый `scripts/bugs.py` также читает `FLASHBACK_API`, по умолчанию работает с production Flashback и принимает ключ только из файла этого устройства или явного `--token-file`. В HexLive параметр игры — `-hexlive-bugs-api <новый-base-url>`.
 
 ## Доступ
 
@@ -70,3 +70,35 @@ WebSocket `/events`:
 `GET /reports/{id}/access` возвращает trusted stamps `created`, `updated`, `status`, `ready`, `fixed` с названием/ID ключа и временем. Отчёты сохраняют legacy-форму. Переданное клиентом имя автора не подменяет атрибуцию.
 
 Перед WebSocket клиент вызывает `POST /api/auth/socket-ticket`, затем подключается к `/api/bugs/v1/events?ticket=...`. Билет одноразовый, действует 30 секунд. Долгоживущий токен в URL не передаётся; CLI также может передать Bearer в заголовке upgrade. Отзыв ключа/сессии завершает соединение кодом 4401.
+
+## Projects, screenshots and voice reports
+
+Legacy requests without a project header still select **HexLive**. Send `X-Flashback-Project: first-signal` for First Signal. `GET /api/projects` lists projects; an administrator can create another project with `POST /api/projects {slug,name,repository}`. Lists, counts, report reads, mutations and file downloads are scoped to the selected project. Existing IDs and revisions are preserved. Links to First Signal cards include `?project=first-signal&bug=ID`.
+
+`POST /reports` additionally accepts an optional UUID `requestId` and `attachments: [{filename,contentType,dataBase64}]`. The report, attribution, screenshot bytes and submission identity commit in **one transaction**. Retrying the same request ID with the same key returns its existing report. Invalid attachments roll back creation. A game reporter submits one screenshot; ordinary clients can include up to four at creation. The report JSON includes an `attachments` array with `id`, `filename`, `contentType`, `size`, `sha256`, `createdAt`, and a relative authenticated `url`; it never embeds image bytes in report lists.
+
+- `POST /reports/{id}/attachments?filename=scene.png&expectedRevision=N` — raw PNG/JPEG body with the matching Content-Type; updates the revision and observes conflicts. Up to 4 MiB per image, 8 attachments per report.
+- `GET /reports/{id}/attachments` — metadata list.
+- `GET /reports/{id}/attachments/{uuid}?project=first-signal` — original bytes. Requires the agent's normal Bearer key or browser session; responds with the real image type, `nosniff`, private/no-store and a SHA-256 ETag. No public media directory or long-lived secret in URLs.
+
+The ordinary agent/device key can read First Signal using the project header. Verify the device identity before writes, then use:
+
+```sh
+python3 scripts/bugs.py --project first-signal whoami
+python3 scripts/bugs.py --project first-signal queue
+python3 scripts/bugs.py --project first-signal get 123
+python3 scripts/bugs.py --project first-signal attachments 123 --output /tmp/bug-123
+python3 scripts/bugs.py --project first-signal attach 123 screenshot.png
+```
+
+The CLI uses only `--token-file` or this device's `~/.config/hexlive/bug-token`. An explicitly missing/empty file fails closed. Repository keys and inherited `HEXLIVE_BUG_TOKEN` never choose identity. Downloads validate the server's SHA-256 before writing a usable image. In First Signal, `Tools/bugs.py` defaults to the First Signal project.
+
+A key with `reporterProject: "first-signal"` is a **write-only game capability**, always non-admin with `created` only. It may create reports and its own transcription drafts. It cannot list/read reports, download attachments, add comments, change statuses, obtain a browser session/socket ticket or manage keys. The player binary uses this separate capability, never an agent or administrator key. It can be revoked in the existing access-key UI. Creation is rate-limited, the recognition queue is bounded, and game-origin screenshots have a per-project 1 GiB quota. Nothing falls back to anonymous report creation.
+
+### Recognition before confirmation
+
+`POST /transcriptions` sends raw PCM WAV, mono 16 kHz / 16 bit, 0.25–90 seconds. Returns **202** `{id,status:"queued"}`. Poll `GET /transcriptions/{id}` with the same key: `{id,status,text,error}` where status is `queued`, `running`, `complete` or `failed`. IDs are random; other keys receive 404. Drafts do **not** create reports. Audio is cleared after recognition or failure; drafts expire after one day. Cancellation in the game does not submit a bug. Unconfirmed drafts cannot enter an agent's queue.
+
+Whisper runs on the VPS's private Docker network, CPU int8, in a separate service with memory/CPU limits. `WHISPER_URL` is server-only. No paid external transcription API or full tracker credential is included in the game. A failed recognizer leaves manual text submission available. Attachments live in PostgreSQL `bytea`, so existing PostgreSQL backups include both report metadata and files. The historical JSON importer only accepts legacy HexLive snapshots without attachments; use database backups for current media-bearing data.
+
+For a separate worker host, `WHISPER_URL` may be an HTTPS endpoint and `WHISPER_TOKEN` supplies its server-only Bearer credential. The worker checks `VOICE_SERVICE_TOKEN` in constant time before reading audio. The game never sees this upstream credential. Existing central HexLive identity validation and its independent `bugs.read` / `bugs.create` / `bugs.manage` permissions remain active; the production identity migration is kept as migration 3, and projects/media/voice are migration 4.

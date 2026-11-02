@@ -15,12 +15,24 @@ import type { ChangeEvent } from "@flashback/contracts";
 import * as store from "./store.ts";
 import { pool } from "./database.ts";
 import { root, settings } from "./config.ts";
+import { projectFor, createProject } from "./projects.ts";
+import { decodeImage } from "./images.ts";
+import { installVoice } from "./voice.ts";
 import { openapi } from "./openapi.ts";
 import { authRoutes, actor, type AuthRequest } from "./auth-http.ts";
-import { accessEvents, getKey, reportAccess, requireCentralPermission } from "./access.ts";
+import {
+  accessEvents,
+  getKey,
+  reportAccess,
+  requireCentralPermission,
+} from "./access.ts";
 
 export async function buildApp() {
-  const app = Fastify({ logger: false, bodyLimit: 8 * 1024 * 1024 });
+  const app = Fastify({
+    logger: false,
+    bodyLimit: 8 * 1024 * 1024,
+    trustProxy: ["127.0.0.1", "172.16.0.0/12"],
+  });
   await app.register(cors, { origin: true, credentials: true });
   await authRoutes(app);
   await app.register(websocket);
@@ -45,36 +57,131 @@ export async function buildApp() {
     return n;
   };
   const base = "/api/bugs/v1";
+  app.decorateRequest("reportProject", "hexlive");
+  const project = (request: any): string => request.reportProject;
+  app.addHook("preHandler", async (request) => {
+    if (
+      !request.url.startsWith(base) ||
+      request.url.startsWith(base + "/events")
+    )
+      return;
+    (request as any).reportProject = await projectFor(request);
+    if ((request.params as any)?.id)
+      await store.getReport(id(request), undefined, project(request));
+  });
+  app.get(
+    "/api/projects",
+    async () => (await pool.query("SELECT * FROM projects ORDER BY name")).rows,
+  );
+  app.post("/api/projects", async (request, reply) => {
+    if (!actor(request).isAdmin)
+      throw new store.ApiError(403, "Только администратор создаёт проекты.");
+    const input = z
+      .object({
+        slug: z.string().regex(/^[a-z0-9-]{1,48}$/),
+        name: z.string().trim().min(1).max(100),
+        repository: z.string().url().optional(),
+      })
+      .parse(request.body);
+    return reply.code(201).send(await createProject(input, actor(request)));
+  });
+  app.addContentTypeParser(
+    ["image/png", "image/jpeg", "audio/wav", "application/octet-stream"],
+    { parseAs: "buffer" },
+    (_request, body, done) => done(null, body),
+  );
+  await installVoice(app, project);
+
   app.get("/health", async () => {
     await pool.query("SELECT 1");
     return { ok: true, instance: settings.name };
   });
-  app.get("/api/instance", async () => ({
-    name: settings.name,
-    repository: settings.repository,
+  app.get("/api/instance", async (request) => ({
+    name: (
+      await pool.query("SELECT name FROM projects WHERE slug=$1", [
+        await projectFor(request),
+      ])
+    ).rows[0].name,
+    repository: (
+      await pool.query("SELECT repository FROM projects WHERE slug=$1", [
+        await projectFor(request),
+      ])
+    ).rows[0].repository,
     auth: "token",
     version: "0.1.0",
   }));
   app.get("/openapi.json", async () => openapi);
   app.get(base + "/reports", async (request) => {
     const q = request.query as any;
-    return store.listReports(q.status, q.archived?.toLowerCase() !== "false");
+    return store.listReports(
+      q.status,
+      q.archived?.toLowerCase() !== "false",
+      undefined,
+      project(request),
+    );
   });
   app.get(base + "/query", async (request) =>
-    store.queryReports(request.query as Record<string, string>),
+    store.queryReports({
+      ...(request.query as Record<string, string>),
+      project: project(request),
+    }),
   );
   app.get(base + "/reports/:id", async (request) =>
-    store.getReport(id(request)),
+    store.getReport(id(request), undefined, project(request)),
   );
-  app.post(base + "/reports", async (request, reply) =>
-    reply
-      .code(201)
-      .send(
-        await store.createReport(
-          createSchema.parse(request.body),
-          actor(request),
+  app.post(
+    base + "/reports",
+    { bodyLimit: 24 * 1024 * 1024 },
+    async (request, reply) =>
+      reply
+        .code(201)
+        .send(
+          await store.createReport(
+            createSchema.parse(request.body),
+            actor(request),
+            project(request),
+          ),
         ),
-      ),
+  );
+  app.get(
+    base + "/reports/:id/attachments",
+    async (request) => (await store.getReport(id(request))).attachments ?? [],
+  );
+  app.post(base + "/reports/:id/attachments", async (request) => {
+    const body = Buffer.isBuffer(request.body) ? request.body : Buffer.alloc(0);
+    const q = request.query as any;
+    const image = decodeImage({
+      filename: q.filename ?? "screenshot.png",
+      contentType: String(request.headers["content-type"]).split(";")[0],
+      dataBase64: body.toString("base64"),
+    });
+    const revision =
+      q.expectedRevision === undefined
+        ? undefined
+        : z.coerce.number().int().positive().parse(q.expectedRevision);
+    return store.attachImage(id(request), image, actor(request), revision);
+  });
+  app.get(
+    base + "/reports/:id/attachments/:attachment",
+    async (request, reply) => {
+      const aid = z
+        .string()
+        .uuid()
+        .parse((request.params as any).attachment);
+      const r = await pool.query(
+        "SELECT bytes,content_type,filename,sha256 FROM report_attachments WHERE id=$1 AND report_id=$2",
+        [aid, id(request)],
+      );
+      if (!r.rowCount) throw new store.ApiError(404, "Вложение не найдено.");
+      const image = r.rows[0];
+      return reply
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Cache-Control", "private, no-store")
+        .header("Content-Disposition", `inline; filename="${image.filename}"`)
+        .header("ETag", `"${image.sha256}"`)
+        .type(image.content_type)
+        .send(image.bytes);
+    },
   );
   app.post(base + "/reports/:id", async (request) =>
     store.updateReport(

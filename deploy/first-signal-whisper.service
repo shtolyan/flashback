@@ -1,0 +1,29 @@
+[Unit]
+Description=First Signal private Russian Whisper worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=firstsignal-voice
+Group=firstsignal-voice
+WorkingDirectory=/opt/first-signal-whisper
+EnvironmentFile=/opt/first-signal-whisper/.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUNBUFFERED=1
+Environment=HF_HUB_DISABLE_TELEMETRY=1
+Environment=HF_HOME=/opt/first-signal-whisper/models/huggingface
+ExecStart=/opt/first-signal-whisper/venv/bin/python /opt/first-signal-whisper/server.py
+Restart=on-failure
+RestartSec=10
+MemoryMax=3G
+CPUQuota=200%
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/first-signal-whisper/models
+
+[Install]
+WantedBy=multi-user.target

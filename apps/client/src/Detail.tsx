@@ -34,9 +34,10 @@ import {
   type Status,
   type CommitPatch,
 } from "@flashback/contracts";
-import { api, base, apiOrigin, RequestError } from "./api";
+import { api, base, apiOrigin, RequestError, apiProject } from "./api";
 import { c, s, T, Button, Badge, Input, Label } from "./ui";
 import Overlay from "./Overlay";
+import Attachments from "./Attachments";
 import { useAccess } from "./Auth";
 import { authCleared } from "./credentials";
 import type { ReportAccess } from "@flashback/contracts";
@@ -123,7 +124,11 @@ export default function Detail({
       const url =
         Platform.OS === "web"
           ? window.location.href
-          : apiOrigin() + "/?bug=" + id;
+          : apiOrigin() +
+            "/?project=" +
+            encodeURIComponent(r?.project ?? apiProject()) +
+            "&bug=" +
+            id;
       if (Platform.OS === "web") {
         await navigator.clipboard.writeText(url);
         notify("Ссылка скопирована");
@@ -535,6 +540,13 @@ export default function Detail({
                 </>
               )}
             </View>
+            <Attachments
+              report={r}
+              onUpdated={(updated) => {
+                client.setQueryData(["report", id], updated);
+                client.invalidateQueries({ queryKey: ["list"] });
+              }}
+            />
             <View style={s.section}>
               <Label>ВЕРСИИ СБОРОК</Label>
               <View style={[s.row, { flexWrap: "wrap", gap: 22 }]}>
@@ -818,7 +830,7 @@ export default function Detail({
 }
 function Patch({ sha }: { sha: string }) {
   const instance = useQuery({
-    queryKey: ["instance"],
+    queryKey: ["instance", apiProject()],
     queryFn: () => api<{ name: string; repository: string }>("/api/instance"),
   });
   const [open, setOpen] = useState(false);

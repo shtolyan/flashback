@@ -44,7 +44,7 @@ import type {
   ReportSummary,
 } from "@flashback/contracts";
 import { statusLabels } from "@flashback/contracts";
-import { api, base, useLive } from "./api";
+import { api, base, useLive, setApiProject } from "./api";
 import { useLocation } from "./navigation";
 import { c, s, T, Button, Badge, colors, statusIcons } from "./ui";
 import Detail from "./Detail";
@@ -65,6 +65,7 @@ export default function Tracker() {
   const [mounted, setMounted] = useState(false);
   const mobile = !mounted || width < 820;
   const { location, set, close } = useLocation();
+  setApiProject(location.project);
   const online = useLive();
   const [collapsed, setCollapsed] = useState(false),
     [menu, setMenu] = useState(false),
@@ -110,16 +111,25 @@ export default function Tracker() {
     q: location.q,
     page: String(location.page),
   }).toString();
-  const query = useQuery({
-    queryKey: ["list", params],
+  const query = useQuery<Page>({
+    queryKey: ["list", location.project, params],
     queryFn: ({ signal }) =>
       api<Page>(base + "/query?" + params, undefined, undefined, signal),
-    placeholderData: keepPreviousData,
+    placeholderData: (previous: Page | undefined) =>
+      previous?.items.every(
+        (r) => (r.project ?? "hexlive") === location.project,
+      )
+        ? previous
+        : undefined,
     refetchInterval: online ? false : 10000,
   });
   const instance = useQuery({
-    queryKey: ["instance"],
+    queryKey: ["instance", location.project],
     queryFn: () => api<{ name: string }>("/api/instance"),
+  });
+  const projects = useQuery({
+    queryKey: ["projects"],
+    queryFn: () => api<{ slug: string; name: string }[]>("/api/projects"),
   });
   const data = query.data;
   useEffect(() => {
@@ -439,6 +449,34 @@ export default function Tracker() {
             >
               {mobile ? "Новый" : "Новый баг"}
             </Button>
+          </View>
+          <View
+            style={{
+              flexDirection: "row",
+              gap: 6,
+              flexWrap: "wrap",
+              paddingHorizontal: mobile ? 16 : 38,
+              paddingTop: 12,
+            }}
+          >
+            {(projects.data ?? []).map((p) => (
+              <Button
+                key={p.slug}
+                variant={p.slug === location.project ? "primary" : "outline"}
+                onPress={() => {
+                  set({
+                    project: p.slug,
+                    bug: null,
+                    page: 1,
+                    q: "",
+                    status: "",
+                  });
+                  setCreating(false);
+                }}
+              >
+                {p.name}
+              </Button>
+            ))}
           </View>
           <View
             style={{

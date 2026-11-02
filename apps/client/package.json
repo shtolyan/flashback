@@ -16,6 +16,7 @@
     "expo": "~57.0.21",
     "expo-clipboard": "~57.0.1",
     "expo-constants": "~57.0.0",
+    "expo-image-picker": "~57.0.20",
     "expo-linking": "~57.0.0",
     "expo-router": "~57.0.0",
     "expo-secure-store": "~57.0.3",

@@ -27,16 +27,50 @@ services:
       HEXLIVE_IDENTITY_URL: ${HEXLIVE_IDENTITY_URL:-}
       INSTANCE_NAME: HexLive
       REPOSITORY_URL: https://github.com/simple-diple/HexLive
+      WHISPER_URL: ${WHISPER_URL:-http://whisper:4320}
+      WHISPER_TOKEN: ${WHISPER_TOKEN:-}
     ports:
       - "127.0.0.1:4310:4310"
     depends_on:
       db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4310/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:4310/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))",
+        ]
       interval: 10s
       timeout: 5s
       retries: 6
     restart: unless-stopped
+  whisper:
+    profiles: ["local-whisper"]
+    build:
+      context: ..
+      dockerfile: apps/whisper/Dockerfile
+    environment:
+      WHISPER_MODEL: ${WHISPER_MODEL:-medium}
+      WHISPER_THREADS: "2"
+    volumes:
+      - whisper_models:/models
+    mem_limit: 3g
+    cpus: 2
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4320/health',timeout=3)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 300s
+    restart: unless-stopped
 volumes:
   pgdata:
+  whisper_models:

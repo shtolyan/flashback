@@ -291,3 +291,153 @@ export const openapi = {
     },
   },
 };
+
+const attachmentSchema = {
+  type: "object",
+  properties: {
+    id: { type: "string", format: "uuid" },
+    filename: string,
+    contentType: { type: "string", enum: ["image/png", "image/jpeg"] },
+    size: { type: "integer" },
+    sha256: string,
+    createdAt: string,
+    url: string,
+  },
+};
+Object.assign(report.properties, {
+  project: string,
+  attachments: { type: "array", items: attachmentSchema },
+});
+const mediaPaths = openapi.paths as Record<string, any>;
+mediaPaths["/api/projects"] = {
+  get: operation("List game projects", undefined, {
+    type: "array",
+    items: {
+      type: "object",
+      properties: { slug: string, name: string, repository: string },
+    },
+  }),
+};
+mediaPaths[base + "/reports/{id}/attachments"] = {
+  parameters: [id],
+  get: operation("List private screenshot metadata", undefined, {
+    type: "array",
+    items: attachmentSchema,
+  }),
+  post: {
+    summary:
+      "Attach a PNG or JPEG; increments revision. Up to 4 MiB and 8 files per report.",
+    parameters: [
+      { name: "filename", in: "query", schema: string },
+      { name: "expectedRevision", in: "query", schema: { type: "integer" } },
+    ],
+    requestBody: {
+      required: true,
+      content: {
+        "image/png": { schema: { type: "string", format: "binary" } },
+        "image/jpeg": { schema: { type: "string", format: "binary" } },
+      },
+    },
+    responses: response(report),
+  },
+};
+mediaPaths[base + "/reports/{id}/attachments/{attachment}"] = {
+  parameters: [
+    id,
+    {
+      name: "attachment",
+      in: "path",
+      required: true,
+      schema: { type: "string", format: "uuid" },
+    },
+  ],
+  get: {
+    summary:
+      "Download screenshot bytes with Bearer authentication or browser cookie",
+    responses: {
+      "200": {
+        description: "Private image",
+        content: {
+          "image/png": { schema: { type: "string", format: "binary" } },
+          "image/jpeg": { schema: { type: "string", format: "binary" } },
+        },
+      },
+      "401": { description: "Authentication required" },
+      "404": { description: "Attachment or report not in this project" },
+    },
+  },
+};
+mediaPaths[base + "/transcriptions"] = {
+  post: {
+    summary: "Queue a private Russian speech draft; does not create a bug",
+    requestBody: {
+      required: true,
+      content: {
+        "audio/wav": {
+          schema: {
+            type: "string",
+            format: "binary",
+            description: "PCM mono 16 kHz / 16 bit, 0.25–90 seconds",
+          },
+        },
+      },
+    },
+    responses: {
+      "202": {
+        description: "Queued draft",
+        content: {
+          "application/json": {
+            schema: {
+              type: "object",
+              properties: {
+                id: { type: "string", format: "uuid" },
+                status: string,
+              },
+            },
+          },
+        },
+      },
+      "429": { description: "Queue or rate limit reached" },
+      "503": { description: "Whisper unavailable; manual text still works" },
+    },
+  },
+};
+mediaPaths[base + "/transcriptions/{job}"] = {
+  parameters: [
+    {
+      name: "job",
+      in: "path",
+      required: true,
+      schema: { type: "string", format: "uuid" },
+    },
+  ],
+  get: operation(
+    "Read own private transcription draft; expires in one day",
+    undefined,
+    {
+      type: "object",
+      properties: {
+        id: string,
+        status: {
+          type: "string",
+          enum: ["queued", "running", "complete", "failed"],
+        },
+        text: string,
+        error: string,
+      },
+    },
+  ),
+};
+for (const [route, value] of Object.entries(mediaPaths))
+  if (route.startsWith(base) && !route.endsWith("/events"))
+    value.parameters = [
+      ...(value.parameters ?? []),
+      {
+        name: "X-Flashback-Project",
+        in: "header",
+        required: false,
+        schema: { type: "string", default: "hexlive" },
+        description:
+          "first-signal or hexlive. Legacy callers retain HexLive; reporter keys are locked to their project.",
+      },
+    ];

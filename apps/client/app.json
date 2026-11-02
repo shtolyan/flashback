@@ -9,7 +9,15 @@
     "icon": "./assets/icon.png",
     "plugins": [
       "expo-router",
-      "expo-secure-store"
+      "expo-secure-store",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Выберите скриншот для отчёта об ошибке.",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
+      ]
     ],
     "ios": {
       "supportsTablet": true,

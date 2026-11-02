@@ -56,6 +56,16 @@ try {
       capturedUtc: new Date().toISOString(),
     };
   }
+  if (
+    snapshot.reports.some(
+      (r) =>
+        (r.attachments?.length ?? 0) > 0 ||
+        (r.project && r.project !== "hexlive"),
+    )
+  )
+    throw new Error(
+      "Legacy import only supports HexLive snapshots without attachments; use PostgreSQL backups for media.",
+    );
   const fingerprint = createHash("sha256")
     .update(
       JSON.stringify(
@@ -139,8 +149,16 @@ try {
     );
     const actual = await listReports(undefined, true, db);
     if (
-      JSON.stringify(stable(actual)) !==
-      JSON.stringify(stable([...snapshot.reports].sort((a, b) => a.id - b.id)))
+      JSON.stringify(
+        stable(actual.map(({ project, attachments, ...r }) => r)),
+      ) !==
+      JSON.stringify(
+        stable(
+          [...snapshot.reports]
+            .map(({ project, attachments, ...r }) => r)
+            .sort((a, b) => a.id - b.id),
+        ),
+      )
     )
       throw new Error("Report verification mismatch");
     const patches = (

@@ -5,6 +5,17 @@ export const createSchema = z.object({
   text,
   context: z.string().nullish(),
   reportedInVersion: z.string().nullish(),
+  requestId: z.string().uuid().optional(),
+  attachments: z
+    .array(
+      z.object({
+        filename: z.string().min(1).max(150),
+        contentType: z.enum(["image/png", "image/jpeg"]),
+        dataBase64: z.string().max(5592416),
+      }),
+    )
+    .max(4)
+    .optional(),
 });
 export const updateSchema = z.object({
   text: text.nullish(),

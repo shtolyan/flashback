@@ -14,6 +14,14 @@ export function apiOrigin() {
   const host = Constants.expoConfig?.hostUri?.split(":")[0];
   return host ? `http://${host}:4310` : "";
 }
+let selectedProject = "hexlive";
+export const apiProject = () => selectedProject;
+export const setApiProject = (project: string) => {
+  selectedProject = project;
+};
+export const projectHeaders = () => ({
+  "X-Flashback-Project": selectedProject,
+});
 export class RequestError extends Error {
   constructor(
     public status: number,
@@ -37,6 +45,7 @@ export async function api<T>(
     method: method ?? (body === undefined ? "GET" : "POST"),
     headers: {
       "Content-Type": "application/json",
+      ...projectHeaders(),
       ...(getBearer() ? { Authorization: `Bearer ${getBearer()}` } : {}),
     },
     credentials: "include",
@@ -67,7 +76,9 @@ export function useLive() {
     const refresh = () =>
       client.invalidateQueries({
         predicate: (q) =>
-          ["list", "report", "report-access", "commit"].includes(String(q.queryKey[0])),
+          ["list", "report", "report-access", "commit"].includes(
+            String(q.queryKey[0]),
+          ),
       });
     async function connect() {
       if (stopped) return;

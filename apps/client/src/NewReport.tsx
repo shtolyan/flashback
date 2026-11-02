@@ -5,13 +5,19 @@ import X from "lucide-react-native/icons/x";
 import Plus from "lucide-react-native/icons/plus";
 import ArrowUpRight from "lucide-react-native/icons/arrow-up-right";
 import type { Report } from "@flashback/contracts";
-import { api, base } from "./api";
+import { api, base, apiProject } from "./api";
 import { c, s, T, Button, Input, Label } from "./ui";
 import Overlay from "./Overlay";
+import { ImageDrafts, type ImageInput } from "./Attachments";
 import { authCleared } from "./credentials";
-let draft = { text: "", context: "", reportedInVersion: "" };
+const drafts = new Map<
+  string,
+  { text: string; context: string; reportedInVersion: string }
+>();
+const pictureDrafts = new Map<string, ImageInput[]>();
 authCleared.add(() => {
-  draft = { text: "", context: "", reportedInVersion: "" };
+  drafts.clear();
+  pictureDrafts.clear();
 });
 export default function NewReport({
   onClose,
@@ -20,21 +26,28 @@ export default function NewReport({
   onClose: () => void;
   onCreated: (r: Report) => void;
 }) {
-  const [values, setValues] = useState(draft);
+  const project = apiProject();
+  const [values, setValues] = useState(
+    drafts.get(project) ?? { text: "", context: "", reportedInVersion: "" },
+  );
+  const [pictures, setPictures] = useState(pictureDrafts.get(project) ?? []);
   const client = useQueryClient();
   const mutation = useMutation({
-    mutationFn: () => api<Report>(base + "/reports", values),
+    mutationFn: () =>
+      api<Report>(base + "/reports", { ...values, attachments: pictures }),
     onSuccess: (r) => {
-      draft = { text: "", context: "", reportedInVersion: "" };
+      drafts.delete(project);
+      pictureDrafts.delete(project);
       client.invalidateQueries({ queryKey: ["list"] });
       client.setQueryData(["report", r.id], r);
       onCreated(r);
     },
   });
-  const change = (key: keyof typeof draft, value: string) =>
+  const change = (key: keyof typeof values, value: string) =>
     setValues((v) => {
-      draft = { ...v, [key]: value };
-      return draft;
+      const next = { ...v, [key]: value };
+      drafts.set(project, next);
+      return next;
     });
   return (
     <Overlay
@@ -92,6 +105,13 @@ export default function NewReport({
             placeholder="Например, 0.1.105"
           />
         </View>
+        <ImageDrafts
+          images={pictures}
+          onChange={(next) => {
+            pictureDrafts.set(project, next);
+            setPictures(next);
+          }}
+        />
         {mutation.error && (
           <T accessibilityRole="alert" style={{ color: c.red }}>
             {mutation.error.message}

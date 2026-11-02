@@ -12,6 +12,7 @@ import {
 import { pool, transaction } from "./database.ts";
 import type { AccessKey } from "@flashback/contracts";
 import { writeKey, record } from "./access.ts";
+import { decodeImage, insertAttachment, type ImageInput } from "./images.ts";
 
 export const events = new EventEmitter();
 import { ApiError } from "./errors.ts";
@@ -19,15 +20,20 @@ export { ApiError } from "./errors.ts";
 export const now = () =>
   new Date().toISOString().slice(0, 16).replace("T", " ") + " UTC";
 const projection = `to_jsonb(r) || jsonb_build_object(
+  'attachments',COALESCE((SELECT jsonb_agg(jsonb_build_object('id',a.id,'filename',a.filename,'contentType',a.content_type,'size',octet_length(a.bytes),'sha256',a.sha256,'createdAt',a.created_at,'url','/api/bugs/v1/reports/'||r.id||'/attachments/'||a.id||'?project='||r.project) ORDER BY a.created_at,a.id) FROM report_attachments a WHERE a.report_id=r.id),'[]'::jsonb),
  'comments',COALESCE((SELECT jsonb_agg(jsonb_build_object('whenUtc',c."whenUtc",'author',c.author,'text',c.text) ORDER BY ordinal) FROM comments c WHERE c."reportId"=r.id),'[]'::jsonb),
  'fixCommits',COALESCE((SELECT jsonb_agg(sha ORDER BY ordinal) FROM fix_commits f WHERE f."reportId"=r.id),'[]'::jsonb)) AS report`;
 const summary = `to_jsonb(r)-'agentHandoff' || jsonb_build_object('commentCount',(SELECT count(*)::int FROM comments c WHERE c."reportId"=r.id),
  'commitCount',GREATEST((SELECT count(*)::int FROM fix_commits f WHERE f."reportId"=r.id),CASE WHEN r."fixCommit"<>'' THEN 1 ELSE 0 END)) AS report`;
 type DB = Pick<PoolClient, "query">;
-export async function getReport(id: number, db: DB = pool): Promise<Report> {
+export async function getReport(
+  id: number,
+  db: DB = pool,
+  project?: string,
+): Promise<Report> {
   const { rows } = await db.query(
-    `SELECT ${projection} FROM reports r WHERE id=$1`,
-    [id],
+    `SELECT ${projection} FROM reports r WHERE id=$1 AND ($2::text IS NULL OR project=$2)`,
+    [id, project ?? null],
   );
   if (!rows.length) throw new ApiError(404, "Отчёт не найден");
   return rows[0].report;
@@ -36,10 +42,11 @@ export async function listReports(
   status?: string,
   includeArchived = true,
   db: DB = pool,
+  project = "hexlive",
 ): Promise<Report[]> {
   const { rows } = await db.query(
-    `SELECT ${projection} FROM reports r WHERE ($1::text IS NULL OR status=$1) AND ($2 OR NOT archived) ORDER BY id`,
-    [status || null, includeArchived],
+    `SELECT ${projection} FROM reports r WHERE ($1::text IS NULL OR status=$1) AND ($2 OR NOT archived) AND project=$3 ORDER BY id`,
+    [status || null, includeArchived, project],
   );
   return rows.map((x) => x.report);
 }
@@ -55,6 +62,7 @@ export async function queryReports(
       : view === "fixed"
         ? "NOT archived AND status='fixed'"
         : "NOT archived AND status<>'fixed'";
+  const project = params.project ?? "hexlive";
   const q = (params.q ?? "").trim().toLocaleLowerCase();
   // Position() implements literal, case-insensitive substring search, including % and _.
   const search = `($1='' OR position($1 in lower(text || ' ' || context || ' ' || "assignedAgent"))>0 OR id::text=replace($1,'#',''))`;
@@ -62,11 +70,12 @@ export async function queryReports(
   return transaction(async (db) => {
     await db.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY");
     const counts = await db.query(
-      `SELECT count(*) FILTER(WHERE NOT archived AND status<>'fixed')::int AS open,count(*) FILTER(WHERE NOT archived AND status='fixed')::int AS fixed,count(*) FILTER(WHERE archived)::int AS archive FROM reports`,
+      `SELECT count(*) FILTER(WHERE NOT archived AND status<>'fixed')::int AS open,count(*) FILTER(WHERE NOT archived AND status='fixed')::int AS fixed,count(*) FILTER(WHERE archived)::int AS archive FROM reports WHERE project=$1`,
+      [project],
     );
     const groups = await db.query(
-      `SELECT status,count(*)::int AS n FROM reports WHERE ${scope} AND ${search} GROUP BY status`,
-      [q],
+      `SELECT status,count(*)::int AS n FROM reports WHERE ${scope} AND ${search} AND project=$2 GROUP BY status`,
+      [q, project],
     );
     const statusCounts = Object.fromEntries(
       statuses.map((s) => [s, groups.rows.find((x) => x.status === s)?.n ?? 0]),
@@ -78,8 +87,8 @@ export async function queryReports(
       pages = Math.max(1, Math.ceil(total / pageSize));
     const page = Math.min(pages, Math.max(1, parseInt(params.page) || 1));
     const result = await db.query(
-      `SELECT ${summary} FROM reports r WHERE ${scope} AND ${search} AND ($2::text IS NULL OR status=$2) ORDER BY id DESC LIMIT $3 OFFSET $4`,
-      [q, status, pageSize, (page - 1) * pageSize],
+      `SELECT ${summary} FROM reports r WHERE ${scope} AND ${search} AND ($2::text IS NULL OR status=$2) AND project=$5 ORDER BY id DESC LIMIT $3 OFFSET $4`,
+      [q, status, pageSize, (page - 1) * pageSize, project],
     );
     return {
       items: result.rows.map((x) => x.report),
@@ -106,20 +115,59 @@ export async function createReport(
     text: string;
     context?: string | null;
     reportedInVersion?: string | null;
+    attachments?: ImageInput[];
+    requestId?: string;
   },
   actor: AccessKey,
+  project = "hexlive",
 ) {
+  const images = (body.attachments ?? []).map(decodeImage);
   const report = await transaction(async (db) => {
     const key = await writeKey(db, actor, "created", "bugs.create");
+    if (key.reporterProject && key.reporterProject !== project)
+      throw new ApiError(403, "Неверный проект игрового ключа.");
+    if (body.requestId) {
+      await db.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
+        key.id + body.requestId,
+      ]);
+      const prior = await db.query(
+        "SELECT report_id FROM report_submissions WHERE token_id=$1 AND request_id=$2",
+        [key.id, body.requestId],
+      );
+      if (prior.rowCount)
+        return getReport(prior.rows[0].report_id, db, project);
+    }
+    if (key.reporterProject) {
+      if (images.length > 1)
+        throw new ApiError(400, "Игровой репорт содержит один скриншот.");
+      await db.query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))", [
+        "report-rate:" + key.id,
+      ]);
+      const rate = await db.query(
+        "SELECT count(*) FROM report_access WHERE token_id=$1 AND action='created' AND at>now()-interval '1 hour'",
+        [key.id],
+      );
+      if (Number(rate.rows[0].count) >= 60)
+        throw new ApiError(429, "Лимит репортов достигнут. Попробуйте позже.");
+    }
     const { rows } = await db.query(
-      'INSERT INTO reports("createdUtc",status,text,context,"reportedInVersion") VALUES($1,\'created\',$2,$3,$4) RETURNING id',
+      'INSERT INTO reports("createdUtc",status,text,context,"reportedInVersion",project) VALUES($1,\'created\',$2,$3,$4,$5) RETURNING id',
       [
         now(),
         body.text,
         body.context?.trim() ?? "",
         body.reportedInVersion?.trim() ?? "",
+        project,
       ],
     );
+    for (const image of images)
+      await insertAttachment(db, rows[0].id, key, image);
+    if (body.requestId)
+      await db.query("INSERT INTO report_submissions VALUES($1,$2,$3)", [
+        key.id,
+        body.requestId,
+        rows[0].id,
+      ]);
     await record(db, key, rows[0].id, "created", "created");
     return getReport(rows[0].id, db);
   });
@@ -322,4 +370,19 @@ export async function putPatch(
   });
   emit({ type: "commit.changed", sha });
   return patch;
+}
+
+export async function attachImage(
+  id: number,
+  image: ReturnType<typeof decodeImage>,
+  actor: AccessKey,
+  revision?: number,
+) {
+  return changed(id, async (db) => {
+    const key = await writeKey(db, actor);
+    await lock(id, db, revision);
+    await insertAttachment(db, id, key, image);
+    await db.query("UPDATE reports SET revision=revision+1 WHERE id=$1", [id]);
+    await record(db, key, id, "attachment");
+  });
 }

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Platform, Linking } from "react-native";
 import type { Status, View } from "@flashback/contracts";
 export type Location = {
+  project: string;
   view: View;
   status: Status | "";
   q: string;
@@ -9,6 +10,7 @@ export type Location = {
   bug: number | null;
 };
 const initial: Location = {
+  project: "hexlive",
   view: "open",
   status: "",
   q: "",
@@ -18,6 +20,7 @@ const initial: Location = {
 function read(url: string): Location {
   const p = new URL(url).searchParams;
   return {
+    project: p.get("project") || "hexlive",
     view: (["open", "fixed", "archive"].includes(p.get("view") ?? "")
       ? p.get("view")
       : "open") as View,
@@ -58,6 +61,7 @@ export function useLocation() {
       if (web) {
         const params = new URLSearchParams();
         params.set("view", next.view);
+        params.set("project", next.project);
         if (next.status) params.set("status", next.status);
         if (next.q) params.set("q", next.q);
         params.set("page", String(next.page));

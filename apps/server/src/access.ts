@@ -8,33 +8,67 @@ import { ApiError } from "./errors.ts";
 export const accessEvents = new EventEmitter();
 export const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 export const randomSecret = () => "fb_" + randomBytes(32).toString("base64url");
-const projection = `id,name,is_admin AS "isAdmin",allowed_statuses AS "allowedStatuses",created_at AS "createdAt",revoked_at AS "revokedAt",last_used_at AS "lastUsedAt"`;
+const projection = `id,name,is_admin AS "isAdmin",allowed_statuses AS "allowedStatuses",reporter_project AS "reporterProject",created_at AS "createdAt",revoked_at AS "revokedAt",last_used_at AS "lastUsedAt"`;
 // Central credentials stay only in process memory; browser sessions require a new login after restart.
 const centralSecrets = new Map<string, string>();
 const centralPermissions = new WeakMap<AccessKey, string[]>();
 async function central(secret: string): Promise<AccessKey> {
   const root = process.env.HEXLIVE_IDENTITY_URL;
-  if (!root || new URL(root).protocol !== "https:") throw new ApiError(503, "Центральный доступ не настроен.");
+  if (!root || new URL(root).protocol !== "https:")
+    throw new ApiError(503, "Центральный доступ не настроен.");
   let response: Response;
-  try { response = await fetch(new URL("/api/identity/v1/validate", root), { method: "POST", headers: { Authorization: `Bearer ${secret}` }, redirect: "error", signal: AbortSignal.timeout(5000) }); }
-  catch { throw new ApiError(503, "Сервис доступа недоступен."); }
+  try {
+    response = await fetch(new URL("/api/identity/v1/validate", root), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${secret}` },
+      redirect: "error",
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch {
+    throw new ApiError(503, "Сервис доступа недоступен.");
+  }
   if (response.status === 401) throw new ApiError(401, "Ключ отозван.");
   if (!response.ok) throw new ApiError(503, "Сервис доступа недоступен.");
-  const subject = await response.json() as { accountId: string; name: string; permissions: string[]; subjectType: string };
-  if (!/^[a-f0-9]{32}$/.test(subject.accountId) || !Array.isArray(subject.permissions)) throw new ApiError(503, "Некорректный ответ сервиса доступа.");
+  const subject = (await response.json()) as {
+    accountId: string;
+    name: string;
+    permissions: string[];
+    subjectType: string;
+  };
+  if (
+    !/^[a-f0-9]{32}$/.test(subject.accountId) ||
+    !Array.isArray(subject.permissions)
+  )
+    throw new ApiError(503, "Некорректный ответ сервиса доступа.");
   const digest = hash(secret);
-  const id = `${digest.slice(0,8)}-${digest.slice(8,12)}-${digest.slice(12,16)}-${digest.slice(16,20)}-${digest.slice(20,32)}`;
-  const allowed = subject.permissions.includes("bugs.manage") ? statuses.filter(s => subject.subjectType !== "agent" || s !== "fixed") : subject.permissions.includes("bugs.create") ? ["created" as Status] : [];
-  const key = { id, name: subject.name, isAdmin: false, allowedStatuses: [...allowed], createdAt: new Date().toISOString(), revokedAt: null, lastUsedAt: null, accountId: subject.accountId } as AccessKey;
+  const id = `${digest.slice(0, 8)}-${digest.slice(8, 12)}-${digest.slice(12, 16)}-${digest.slice(16, 20)}-${digest.slice(20, 32)}`;
+  const allowed = subject.permissions.includes("bugs.manage")
+    ? statuses.filter((s) => subject.subjectType !== "agent" || s !== "fixed")
+    : subject.permissions.includes("bugs.create")
+      ? ["created" as Status]
+      : [];
+  const key = {
+    id,
+    name: subject.name,
+    isAdmin: false,
+    allowedStatuses: [...allowed],
+    createdAt: new Date().toISOString(),
+    revokedAt: null,
+    lastUsedAt: null,
+    accountId: subject.accountId,
+  } as AccessKey;
   centralPermissions.set(key, subject.permissions);
   centralSecrets.set(id, secret);
   return key;
 }
 export function requireCentralPermission(key: AccessKey, permission: string) {
   const rights = centralPermissions.get(key);
-  if (rights && !rights.includes(permission)) throw new ApiError(403, `Нет права ${permission}.`);
+  if (rights && !rights.includes(permission))
+    throw new ApiError(403, `Нет права ${permission}.`);
 }
-export function isCentral(key: AccessKey) { return centralPermissions.has(key); }
+export function isCentral(key: AccessKey) {
+  return centralPermissions.has(key);
+}
 export async function getKey(
   id: string,
   db: Pick<PoolClient, "query"> = pool,
@@ -98,10 +132,26 @@ export async function reportAccess(id: number): Promise<ReportAccess> {
   };
 }
 export async function createKey(
-  input: { name: string; isAdmin: boolean; allowedStatuses: Status[] },
+  input: {
+    name: string;
+    isAdmin: boolean;
+    allowedStatuses: Status[];
+    reporterProject?: string;
+  },
   creator?: AccessKey,
   suppliedSecret?: string,
 ) {
+  if (input.reporterProject && input.isAdmin)
+    throw new ApiError(400, "Игровой ключ не может быть администратором.");
+  if (
+    input.reporterProject &&
+    !(
+      await pool.query("SELECT 1 FROM projects WHERE slug=$1", [
+        input.reporterProject,
+      ])
+    ).rowCount
+  )
+    throw new ApiError(400, "Проект игрового ключа не найден.");
   const secret = suppliedSecret ?? randomSecret();
   if (secret.length < 24 || secret.length > 4096)
     throw new ApiError(400, "Ключ слишком короткий или длинный.");
@@ -110,14 +160,19 @@ export async function createKey(
     if (creator && !(await getKey(creator.id, db, true)).isAdmin)
       throw new ApiError(403, "Только администратор управляет ключами.");
     const result = await db.query(
-      `INSERT INTO access_tokens(id,name,secret_hash,is_admin,allowed_statuses,created_by) VALUES($1,$2,$3,$4,$5,$6) RETURNING ${projection}`,
+      `INSERT INTO access_tokens(id,name,secret_hash,is_admin,allowed_statuses,created_by,reporter_project) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING ${projection}`,
       [
         randomUUID(),
         input.name.trim(),
         hash(secret),
-        input.isAdmin,
-        input.isAdmin ? [...statuses] : input.allowedStatuses,
+        input.reporterProject ? false : input.isAdmin,
+        input.reporterProject
+          ? ["created"]
+          : input.isAdmin
+            ? [...statuses]
+            : input.allowedStatuses,
         creator?.id ?? null,
+        input.reporterProject ?? null,
       ],
     );
     return result.rows[0] as AccessKey;
@@ -161,7 +216,16 @@ export async function revokeKey(id: string, actor: AccessKey) {
 export async function authenticate(secret: string): Promise<AccessKey> {
   if (secret.startsWith("hexlive_")) {
     const key = await central(secret);
-    await pool.query(`INSERT INTO access_tokens(id,name,secret_hash,is_admin,allowed_statuses,central_account_id) VALUES($1,$2,$3,false,$4,$5) ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name,allowed_statuses=EXCLUDED.allowed_statuses`, [key.id, key.name, "central:" + hash(secret), key.allowedStatuses, (key as AccessKey & { accountId: string }).accountId]);
+    await pool.query(
+      `INSERT INTO access_tokens(id,name,secret_hash,is_admin,allowed_statuses,central_account_id) VALUES($1,$2,$3,false,$4,$5) ON CONFLICT(id) DO UPDATE SET name=EXCLUDED.name,allowed_statuses=EXCLUDED.allowed_statuses`,
+      [
+        key.id,
+        key.name,
+        "central:" + hash(secret),
+        key.allowedStatuses,
+        (key as AccessKey & { accountId: string }).accountId,
+      ],
+    );
     return key;
   }
   if (!secret || secret.length > 4096)

@@ -71,17 +71,43 @@ export async function authRoutes(app: FastifyInstance) {
       (request as AuthRequest).accessKey = await access.sessionKey(secret);
       (request as AuthRequest).sessionHash = access.hash(secret);
     }
+    const key = actor(request);
+    if (key.reporterProject) {
+      const permitted =
+        (request.method === "POST" &&
+          (url === "/api/bugs/v1/reports" ||
+            url === "/api/bugs/v1/transcriptions")) ||
+        (request.method === "GET" &&
+          (/^\/api\/bugs\/v1\/transcriptions\/[a-f0-9-]{36}$/.test(url) ||
+            url === "/api/auth/me" ||
+            url === "/api/instance"));
+      if (!permitted)
+        throw new ApiError(
+          403,
+          "Игровой ключ может только отправлять репорты и расшифровывать запись.",
+        );
+    }
   });
   app.addHook("preHandler", async (request) => {
     const key = actor(request);
     if (!key || !access.isCentral(key)) return;
     const url = request.url.split("?")[0];
-    if (url.startsWith("/api/access-keys")) throw new ApiError(403, "Управление ключами: https://keys.62-146-235-120.sslip.io/");
+    if (url.startsWith("/api/access-keys"))
+      throw new ApiError(
+        403,
+        "Управление ключами: https://keys.62-146-235-120.sslip.io/",
+      );
     if (url.startsWith("/api/bugs/v1")) {
-      const permission = request.method === "GET" || request.method === "HEAD" ? "bugs.read" : request.method === "POST" && url === "/api/bugs/v1/reports" ? "bugs.create" : "bugs.manage";
+      const permission =
+        request.method === "GET" || request.method === "HEAD"
+          ? "bugs.read"
+          : request.method === "POST" && url === "/api/bugs/v1/reports"
+            ? "bugs.create"
+            : "bugs.manage";
       access.requireCentralPermission(key, permission);
     }
-    if (url === "/api/auth/socket-ticket") access.requireCentralPermission(key, "bugs.read");
+    if (url === "/api/auth/socket-ticket")
+      access.requireCentralPermission(key, "bugs.read");
   });
   app.post("/api/auth/session", async (request, reply) => {
     const t = Date.now();
@@ -95,6 +121,11 @@ export async function authRoutes(app: FastifyInstance) {
       .object({ token: z.string().min(1).max(4096) })
       .parse(request.body);
     const key = await access.authenticate(body.token.trim());
+    if (key.reporterProject)
+      throw new ApiError(
+        403,
+        "Игровой ключ не предназначен для входа в трекер.",
+      );
     attempts.delete(request.ip);
     const secret = await access.makeSession(key);
     reply.setCookie(cookieName, secret, {
@@ -140,6 +171,10 @@ export async function authRoutes(app: FastifyInstance) {
         name: z.string().trim().min(1).max(80),
         isAdmin: z.boolean().default(false),
         allowedStatuses: z.array(z.enum(statuses)).max(5).default([]),
+        reporterProject: z
+          .string()
+          .regex(/^[a-z0-9-]{1,48}$/)
+          .optional(),
       })
       .parse(request.body);
     return reply.code(201).send(await access.createKey(body, creator));

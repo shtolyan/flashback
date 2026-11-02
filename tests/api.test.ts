@@ -586,32 +586,515 @@ test("central key permissions are independent, mutable and rechecked in browser 
   let revoked = false;
   let subjectType = "player";
   const secret = "hexlive_" + "a".repeat(64);
-  globalThis.fetch = async () => revoked ? new Response("", { status: 401 }) : Response.json({ accountId: "a".repeat(32), name: "Central tester", permissions, subjectType });
-  const call = (method: any, url: string, payload?: any) => app.inject({ method, url, payload, headers: { authorization: "Bearer " + secret } });
+  globalThis.fetch = async () =>
+    revoked
+      ? new Response("", { status: 401 })
+      : Response.json({
+          accountId: "a".repeat(32),
+          name: "Central tester",
+          permissions,
+          subjectType,
+        });
+  const call = (method: any, url: string, payload?: any) =>
+    app.inject({
+      method,
+      url,
+      payload,
+      headers: { authorization: "Bearer " + secret },
+    });
   try {
     assert.equal((await call("GET", base + "/reports")).statusCode, 403);
-    const created = await call("POST", base + "/reports", { text: "Central permissions fixture" });
+    const created = await call("POST", base + "/reports", {
+      text: "Central permissions fixture",
+    });
     assert.equal(created.statusCode, 201);
     const id = created.json().id;
-    assert.equal((await call("POST", base + `/reports/${id}`, { text: "denied" })).statusCode, 403);
+    assert.equal(
+      (await call("POST", base + `/reports/${id}`, { text: "denied" }))
+        .statusCode,
+      403,
+    );
     permissions = ["bugs.read"];
     assert.equal((await call("GET", base + "/reports")).statusCode, 200);
-    assert.equal((await call("POST", base + "/reports", { text: "denied" })).statusCode, 403);
-    const login = await app.inject({ method: "POST", url: "/api/auth/session", payload: { token: secret } });
+    assert.equal(
+      (await call("POST", base + "/reports", { text: "denied" })).statusCode,
+      403,
+    );
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/auth/session",
+      payload: { token: secret },
+    });
     assert.equal(login.statusCode, 200);
     const sessionCookie = String(login.headers["set-cookie"]).split(";")[0];
     permissions = [];
-    assert.equal((await app.inject({ method: "GET", url: base + "/reports", headers: { cookie: sessionCookie } })).statusCode, 403);
+    assert.equal(
+      (
+        await app.inject({
+          method: "GET",
+          url: base + "/reports",
+          headers: { cookie: sessionCookie },
+        })
+      ).statusCode,
+      403,
+    );
     permissions = ["bugs.read", "bugs.manage", "keys.manage"];
-    assert.equal((await call("POST", base + `/reports/${id}`, { text: "allowed" })).statusCode, 200);
-    assert.equal((await call("POST", "/api/access-keys", { name: "escalation", isAdmin: true })).statusCode, 403);
+    assert.equal(
+      (await call("POST", base + `/reports/${id}`, { text: "allowed" }))
+        .statusCode,
+      200,
+    );
+    assert.equal(
+      (
+        await call("POST", "/api/access-keys", {
+          name: "escalation",
+          isAdmin: true,
+        })
+      ).statusCode,
+      403,
+    );
     subjectType = "agent";
-    assert.equal((await call("POST", base + `/reports/${id}`, { status: "fixed" })).statusCode, 403);
+    assert.equal(
+      (await call("POST", base + `/reports/${id}`, { status: "fixed" }))
+        .statusCode,
+      403,
+    );
     revoked = true;
-    assert.equal((await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: sessionCookie } })).statusCode, 401);
+    assert.equal(
+      (
+        await app.inject({
+          method: "GET",
+          url: "/api/auth/me",
+          headers: { cookie: sessionCookie },
+        })
+      ).statusCode,
+      401,
+    );
     assert.equal((await call("GET", base + "/reports")).statusCode, 401);
   } finally {
     globalThis.fetch = originalFetch;
-    if (oldAuthority === undefined) delete process.env.HEXLIVE_IDENTITY_URL; else process.env.HEXLIVE_IDENTITY_URL = oldAuthority;
+    if (oldAuthority === undefined) delete process.env.HEXLIVE_IDENTITY_URL;
+    else process.env.HEXLIVE_IDENTITY_URL = oldAuthority;
   }
+});
+
+test("First Signal is isolated from legacy lists, detail writes and counts", async () => {
+  const key = await createKey({
+    name: "First Signal game",
+    isAdmin: false,
+    allowedStatuses: ["created"],
+    reporterProject: "first-signal",
+  });
+  const headers = {
+    authorization: "Bearer " + key.secret,
+    "x-flashback-project": "first-signal",
+  };
+  const result = await app.inject({
+    method: "POST",
+    url: base + "/reports",
+    headers,
+    payload: {
+      text: "Бочка у колодца",
+      context: '{"room":"r2-square","player":{"x":2,"y":3}}',
+    },
+  });
+  assert.equal(result.statusCode, 201);
+  const r = result.json();
+  assert.equal(r.project, "first-signal");
+  assert.ok(
+    !(await request("GET", "/reports")).json().some((x: any) => x.id === r.id),
+  );
+  assert.equal((await request("GET", "/reports/" + r.id)).statusCode, 404);
+  assert.equal(
+    (await request("POST", "/reports/" + r.id, { text: "wrong project" }))
+      .statusCode,
+    404,
+  );
+  const list = await app.inject({
+    method: "GET",
+    url: base + "/query",
+    headers: {
+      authorization: "Bearer " + adminSecret,
+      "x-flashback-project": "first-signal",
+    },
+  });
+  assert.equal(list.json().total, 1);
+  assert.equal(list.json().items[0].id, r.id);
+  for (const [method, url] of [
+    ["GET", base + "/reports"],
+    ["POST", base + "/reports/" + r.id],
+    ["GET", "/api/access-keys"],
+    ["POST", "/api/auth/socket-ticket"],
+  ])
+    assert.equal(
+      (
+        await app.inject({
+          method: method as any,
+          url,
+          headers,
+          payload: method === "POST" ? {} : undefined,
+        })
+      ).statusCode,
+      403,
+    );
+  assert.equal(
+    (
+      await app.inject({
+        method: "POST",
+        url: base + "/reports",
+        headers: { ...headers, "x-flashback-project": "hexlive" },
+        payload: { text: "wrong" },
+      })
+    ).statusCode,
+    403,
+  );
+});
+const png =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==";
+test("screenshots commit atomically, download privately and retry without duplicate reports", async () => {
+  const { randomUUID, createHash } = await import("node:crypto");
+  const requestId = randomUUID();
+  const key = await createKey({
+    name: "Image reporter",
+    isAdmin: false,
+    allowedStatuses: ["created"],
+    reporterProject: "first-signal",
+  });
+  const headers = {
+    authorization: "Bearer " + key.secret,
+    "x-flashback-project": "first-signal",
+  };
+  const payload = {
+    text: "Не та бочка",
+    requestId,
+    attachments: [
+      { filename: "scene.png", contentType: "image/png", dataBase64: png },
+    ],
+  };
+  const results = await Promise.all(
+    [1, 2].map(() =>
+      app.inject({ method: "POST", url: base + "/reports", headers, payload }),
+    ),
+  );
+  assert.ok(results.every((x) => x.statusCode === 201));
+  assert.equal(results[0].json().id, results[1].json().id);
+  const r = results[0].json();
+  assert.equal(r.attachments.length, 1);
+  const image = r.attachments[0];
+  assert.equal(
+    image.sha256,
+    createHash("sha256").update(Buffer.from(png, "base64")).digest("hex"),
+  );
+  assert.equal(
+    (await app.inject({ method: "GET", url: image.url })).statusCode,
+    401,
+  );
+  assert.equal(
+    (await app.inject({ method: "GET", url: image.url, headers })).statusCode,
+    403,
+  );
+  const downloaded = await app.inject({
+    method: "GET",
+    url: image.url,
+    headers: { authorization: "Bearer " + adminSecret },
+  });
+  assert.equal(downloaded.statusCode, 200);
+  assert.equal(downloaded.headers["x-content-type-options"], "nosniff");
+  assert.deepEqual(downloaded.rawPayload, Buffer.from(png, "base64"));
+  assert.equal(
+    (
+      await pool.query(
+        "SELECT count(*) FROM report_submissions WHERE request_id=$1",
+        [requestId],
+      )
+    ).rows[0].count,
+    "1",
+  );
+  const before = Number(
+    (await pool.query("SELECT count(*) FROM reports")).rows[0].count,
+  );
+  const bad = await app.inject({
+    method: "POST",
+    url: base + "/reports",
+    headers,
+    payload: {
+      text: "bad",
+      attachments: [
+        {
+          filename: "bad.png",
+          contentType: "image/png",
+          dataBase64: Buffer.from("<svg/>").toString("base64"),
+        },
+      ],
+    },
+  });
+  assert.equal(bad.statusCode, 415);
+  assert.equal(
+    Number((await pool.query("SELECT count(*) FROM reports")).rows[0].count),
+    before,
+  );
+});
+test("adding a screenshot observes report revision and scopes the file to its own report", async () => {
+  const r = await create("Фото к тексту");
+  const headers = {
+    authorization: "Bearer " + adminSecret,
+    "content-type": "image/png",
+  };
+  const upload = await app.inject({
+    method: "POST",
+    url:
+      base +
+      "/reports/" +
+      r.id +
+      "/attachments?filename=added.png&expectedRevision=1",
+    headers,
+    payload: Buffer.from(png, "base64"),
+  });
+  assert.equal(upload.statusCode, 200);
+  assert.equal(upload.json().revision, 2);
+  assert.equal(upload.json().attachments.length, 1);
+  assert.equal(
+    (
+      await app.inject({
+        method: "POST",
+        url: base + "/reports/" + r.id + "/attachments?expectedRevision=1",
+        headers,
+        payload: Buffer.from(png, "base64"),
+      })
+    ).statusCode,
+    409,
+  );
+  const other = await create();
+  const file = upload.json().attachments[0];
+  assert.equal(
+    (await request("GET", `/reports/${other.id}/attachments/${file.id}`))
+      .statusCode,
+    404,
+  );
+});
+test("voice recognition is a private draft, disposes audio and never files a bug before confirmation", async () => {
+  const { createServer } = await import("node:http");
+  const worker = createServer(async (req, res) => {
+    for await (const _ of req) {
+    }
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ text: "У колодца бочка мешает пройти." }));
+  });
+  await new Promise<void>((resolve) => worker.listen(0, "127.0.0.1", resolve));
+  const address = worker.address() as any;
+  process.env.WHISPER_URL = "http://127.0.0.1:" + address.port;
+  try {
+    const key = await createKey({
+      name: "Voice reporter",
+      isAdmin: false,
+      allowedStatuses: ["created"],
+      reporterProject: "first-signal",
+    });
+    const headers = {
+      authorization: "Bearer " + key.secret,
+      "content-type": "audio/wav",
+    };
+    const audio = Buffer.alloc(32044);
+    audio.write("RIFF", 0);
+    audio.writeUInt32LE(32036, 4);
+    audio.write("WAVEfmt ", 8);
+    audio.writeUInt32LE(16, 16);
+    audio.writeUInt16LE(1, 20);
+    audio.writeUInt16LE(1, 22);
+    audio.writeUInt32LE(16000, 24);
+    audio.writeUInt32LE(32000, 28);
+    audio.writeUInt16LE(2, 32);
+    audio.writeUInt16LE(16, 34);
+    audio.write("data", 36);
+    audio.writeUInt32LE(32000, 40);
+    const before = Number(
+      (await pool.query("SELECT count(*) FROM reports")).rows[0].count,
+    );
+    const start = await app.inject({
+      method: "POST",
+      url: base + "/transcriptions",
+      headers,
+      payload: audio,
+    });
+    assert.equal(start.statusCode, 202);
+    let job: any;
+    for (let i = 0; i < 40; i++) {
+      job = (
+        await app.inject({
+          method: "GET",
+          url: base + "/transcriptions/" + start.json().id,
+          headers: { authorization: headers.authorization },
+        })
+      ).json();
+      if (job.status === "complete") break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    assert.equal(job.status, "complete");
+    assert.match(job.text, /колодца/);
+    assert.equal(
+      (
+        await pool.query("SELECT audio FROM voice_transcriptions WHERE id=$1", [
+          job.id,
+        ])
+      ).rows[0].audio,
+      null,
+    );
+    assert.equal(
+      Number((await pool.query("SELECT count(*) FROM reports")).rows[0].count),
+      before,
+    );
+    assert.equal(
+      (await request("GET", "/transcriptions/" + job.id)).statusCode,
+      404,
+    );
+    assert.equal(
+      (
+        await app.inject({
+          method: "POST",
+          url: base + "/transcriptions",
+          headers,
+          payload: Buffer.from("not audio"),
+        })
+      ).statusCode,
+      400,
+    );
+  } finally {
+    delete process.env.WHISPER_URL;
+    await new Promise<void>((resolve) => worker.close(() => resolve()));
+  }
+});
+
+test("agent CLI uses the selected device file and downloads verifiable screenshot bytes", async () => {
+  const fs = await import("node:fs/promises"),
+    os = await import("node:os"),
+    path = await import("node:path");
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "flashback-media-cli-"));
+  try {
+    const tokenFile = path.join(dir, "token");
+    await fs.writeFile(tokenFile, adminSecret, { mode: 0o600 });
+    const args = [
+      "scripts/bugs.py",
+      "--api",
+      origin + base,
+      "--project",
+      "first-signal",
+      "--token-file",
+      tokenFile,
+    ];
+    const run = async (...extra: string[]) =>
+      JSON.parse(
+        (
+          await exec("python3", [...args, ...extra], {
+            env: {
+              ...process.env,
+              HEXLIVE_BUG_TOKEN: "must-not-select-this-key",
+            },
+          })
+        ).stdout,
+      );
+    const identity = await run("whoami");
+    assert.equal(identity.id, adminKey.id);
+    const r = await run("create", "--text", "Media CLI fixture");
+    const file = path.join(dir, "scene.png");
+    await fs.writeFile(file, Buffer.from(png, "base64"));
+    const attached = await run("attach", String(r.id), file);
+    assert.equal(attached.attachments.length, 1);
+    const downloaded = await run(
+      "attachments",
+      String(r.id),
+      "--output",
+      path.join(dir, "images"),
+    );
+    assert.equal(downloaded.length, 1);
+    assert.deepEqual(
+      await fs.readFile(downloaded[0].path),
+      Buffer.from(png, "base64"),
+    );
+    const wrong = await exec(
+      "python3",
+      [
+        "scripts/bugs.py",
+        "--api",
+        origin + base,
+        "--token-file",
+        path.join(dir, "missing"),
+        "whoami",
+      ],
+      { env: { ...process.env, HEXLIVE_BUG_TOKEN: adminSecret } },
+    ).then(
+      () => false,
+      () => true,
+    );
+    assert.ok(
+      wrong,
+      "An explicit missing file must not fall back to inherited credentials",
+    );
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("project provisioning and reporter-key creation require an administrator and retain write-only scope", async () => {
+  const reader = await createKey({
+    name: "Project member",
+    isAdmin: false,
+    allowedStatuses: ["created"],
+  });
+  const denied = await app.inject({
+    method: "POST",
+    url: "/api/projects",
+    headers: { authorization: "Bearer " + reader.secret },
+    payload: { slug: "not-created", name: "No" },
+  });
+  assert.equal(denied.statusCode, 403);
+  const response = await app.inject({
+    method: "POST",
+    url: "/api/projects",
+    headers: { authorization: "Bearer " + adminSecret },
+    payload: { slug: "api-project", name: "API project" },
+  });
+  assert.equal(response.statusCode, 201);
+  const reporter = await app.inject({
+    method: "POST",
+    url: "/api/access-keys",
+    headers: { authorization: "Bearer " + adminSecret },
+    payload: {
+      name: "New game",
+      reporterProject: "api-project",
+      allowedStatuses: ["fixed"],
+    },
+  });
+  assert.equal(reporter.statusCode, 201);
+  const data = reporter.json();
+  assert.deepEqual(data.key.allowedStatuses, ["created"]);
+  assert.equal(data.key.reporterProject, "api-project");
+  assert.equal(
+    (
+      await app.inject({
+        method: "GET",
+        url: base + "/reports",
+        headers: { authorization: "Bearer " + data.secret },
+      })
+    ).statusCode,
+    403,
+  );
+  const report = await app.inject({
+    method: "POST",
+    url: base + "/reports",
+    headers: { authorization: "Bearer " + data.secret },
+    payload: { text: "Scoped report" },
+  });
+  assert.equal(report.statusCode, 201);
+  assert.equal(report.json().project, "api-project");
+  const bad = await app.inject({
+    method: "POST",
+    url: "/api/access-keys",
+    headers: { authorization: "Bearer " + adminSecret },
+    payload: {
+      name: "Bad admin",
+      reporterProject: "api-project",
+      isAdmin: true,
+    },
+  });
+  assert.equal(bad.statusCode, 400);
 });
