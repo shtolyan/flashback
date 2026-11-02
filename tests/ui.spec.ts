@@ -377,3 +377,51 @@ test("First Signal project, private screenshot preview and attachment upload", a
     });
   }
 });
+
+test("screenshot preview fits its desktop panel and a phone safe area", async ({
+  page,
+  request,
+}) => {
+  const png =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a1ioAAAAASUVORK5CYII=";
+  const response = await request.post(api + "/reports", {
+    headers: { "X-Flashback-Project": "first-signal" },
+    data: {
+      text: "Photo bounds fixture",
+      attachments: [
+        { filename: "bounds.png", contentType: "image/png", dataBase64: png },
+      ],
+    },
+  });
+  const r = await response.json();
+  try {
+    for (const viewport of [
+      { width: 1440, height: 960 },
+      { width: 390, height: 844 },
+    ]) {
+      await page.setViewportSize(viewport);
+      await page.goto("/?project=first-signal&bug=" + r.id);
+      await page.getByRole("button", { name: "Открыть bounds.png" }).click();
+      const panel = page.getByRole("dialog", { name: "Скриншот бага" }),
+        image = page.getByRole("img", { name: "Скриншот игры" });
+      await expect(panel).toBeVisible();
+      const p = (await panel.boundingBox())!,
+        i = (await image.boundingBox())!;
+      expect(i.x).toBeGreaterThanOrEqual(p.x);
+      expect(i.x + i.width).toBeLessThanOrEqual(p.x + p.width + 1);
+      expect(i.y + i.height).toBeLessThanOrEqual(p.y + p.height + 1);
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= innerWidth,
+        ),
+      ).toBe(true);
+      await page.screenshot({
+        path: "test-results/screenshot-bounds-" + viewport.width + ".png",
+      });
+    }
+  } finally {
+    await request.delete(api + "/reports/" + r.id, {
+      headers: { "X-Flashback-Project": "first-signal" },
+    });
+  }
+});

@@ -34,3 +34,4 @@ dialog.flashback-panel.center{
   }
   .flashback-panel.center .flashback-panel-content{height:100%;max-height:none}
 }
+@media(min-width:820px){dialog.flashback-panel.center.wide{width:min(1200px,94vw)}}

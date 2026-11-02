@@ -20,6 +20,7 @@ export default function Overlay({
   onClose,
   label,
   center,
+  wide,
   backgroundColor = c.surface,
 }: OverlayProps) {
   const ref = useRef<HTMLDialogElement>(null);
@@ -41,7 +42,9 @@ export default function Overlay({
       ref={ref}
       aria-label={label}
       style={{ backgroundColor }}
-      className={"flashback-panel" + (center ? " center" : "")}
+      className={
+        "flashback-panel" + (center ? " center" : "") + (wide ? " wide" : "")
+      }
       onCancel={(e) => {
         e.preventDefault();
         callback.current();

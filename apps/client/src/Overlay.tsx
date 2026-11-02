@@ -6,6 +6,7 @@ export type OverlayProps = React.PropsWithChildren<{
   onClose: () => void;
   label: string;
   center?: boolean;
+  wide?: boolean;
   backgroundColor?: string;
 }>;
 export default function Overlay({

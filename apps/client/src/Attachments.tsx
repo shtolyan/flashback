@@ -196,17 +196,25 @@ export default function Attachments({
         </T>
       )}
       {selected && (
-        <Overlay label="Скриншот бага" center onClose={() => setSelected(null)}>
-          <View style={{ padding: 16, gap: 12 }}>
+        <Overlay
+          label="Скриншот бага"
+          center
+          wide
+          onClose={() => setSelected(null)}
+        >
+          <View style={{ padding: 16, gap: 12, width: "100%" }}>
             <View style={s.row}>
-              <T style={s.grow}>{selected.filename}</T>
+              <T style={s.grow} numberOfLines={2}>
+                {selected.filename}
+              </T>
               <Button onPress={() => setSelected(null)}>Закрыть</Button>
             </View>
             <Image
+              accessibilityLabel="Скриншот игры"
               source={source(selected)}
               style={{
-                width: Math.min(screen.width - 64, 1100),
-                height: Math.min(screen.height - 150, 700),
+                width: "100%",
+                height: Math.max(100, Math.min(screen.height - 220, 700)),
               }}
               resizeMode="contain"
             />
